@@ -6,11 +6,12 @@ from sqlalchemy import Column, Integer, String, Boolean, Date, Time, Float, Fore
 from sqlalchemy.orm import relationship
 from geoalchemy2 import Geometry
 from app.database import Base
-from datetime import datetime
+from datetime import datetime, date
+
 
 class Agency(Base):
     __tablename__ = "agencies"
-    
+
     agency_id = Column(Integer, primary_key=True, index=True)
     agency_name = Column(String(255), nullable=False)
     agency_url = Column(String(500))
@@ -18,16 +19,16 @@ class Agency(Base):
     agency_phone = Column(String(50))
     agency_lang = Column(String(10))
     agency_fare_url = Column(String(500))
-    created_at = Column(Date, default=datetime.utcnow)
-    updated_at = Column(Date, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+    created_at = Column(Date, default=date.today)
+    updated_at = Column(Date, default=date.today, onupdate=date.today)
+
     # Relaciones
     routes = relationship("Route", back_populates="agency")
 
 
 class Route(Base):
     __tablename__ = "routes"
-    
+
     route_id = Column(Integer, primary_key=True, index=True)
     agency_id = Column(Integer, ForeignKey('agencies.agency_id'))
     route_short_name = Column(String(50), nullable=False, index=True)
@@ -39,9 +40,9 @@ class Route(Base):
     route_text_color = Column(String(6), default='000000')
     is_electric = Column(Boolean, default=False)
     km_total = Column(DECIMAL(10, 2))
-    created_at = Column(Date, default=datetime.utcnow)
-    updated_at = Column(Date, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+    created_at = Column(Date, default=date.today)
+    updated_at = Column(Date, default=date.today, onupdate=date.today)
+
     # Relaciones
     agency = relationship("Agency", back_populates="routes")
     trips = relationship("Trip", back_populates="route", cascade="all, delete-orphan")
@@ -51,7 +52,7 @@ class Route(Base):
 
 class Stop(Base):
     __tablename__ = "stops"
-    
+
     stop_id = Column(Integer, primary_key=True, index=True)
     stop_code = Column(String(50), unique=True, index=True)
     stop_name = Column(String(255), nullable=False, index=True)
@@ -64,23 +65,23 @@ class Stop(Base):
     parent_station = Column(String(50))
     wheelchair_boarding = Column(Integer, default=0)
     geom = Column(Geometry('POINT', srid=4326))
-    created_at = Column(Date, default=datetime.utcnow)
-    updated_at = Column(Date, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+    created_at = Column(Date, default=date.today)
+    updated_at = Column(Date, default=date.today, onupdate=date.today)
+
     # Relaciones
     stop_times = relationship("StopTime", back_populates="stop")
 
 
 class Shape(Base):
     __tablename__ = "shapes"
-    
+
     shape_id = Column(Integer, primary_key=True, index=True)
     route_id = Column(Integer, ForeignKey('routes.route_id', ondelete='CASCADE'))
     shape_geom = Column(Geometry('LINESTRING', srid=4326))
     shape_dist_traveled = Column(DECIMAL(10, 3))
     kml_filename = Column(String(255))
-    created_at = Column(Date, default=datetime.utcnow)
-    
+    created_at = Column(Date, default=date.today)
+
     # Relaciones
     route = relationship("Route", back_populates="shapes")
     shape_points = relationship("ShapePoint", back_populates="shape", cascade="all, delete-orphan")
@@ -88,21 +89,21 @@ class Shape(Base):
 
 class ShapePoint(Base):
     __tablename__ = "shape_points"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     shape_id = Column(Integer, ForeignKey('shapes.shape_id', ondelete='CASCADE'), index=True)
     shape_pt_lat = Column(DECIMAL(10, 8), nullable=False)
     shape_pt_lon = Column(DECIMAL(11, 8), nullable=False)
     shape_pt_sequence = Column(Integer, nullable=False)
     shape_dist_traveled = Column(DECIMAL(10, 3))
-    
+
     # Relaciones
     shape = relationship("Shape", back_populates="shape_points")
 
 
 class Calendar(Base):
     __tablename__ = "calendar"
-    
+
     service_id = Column(Integer, primary_key=True, index=True)
     service_name = Column(String(100), nullable=False, unique=True)
     monday = Column(Boolean, default=True)
@@ -114,14 +115,14 @@ class Calendar(Base):
     sunday = Column(Boolean, default=True)
     start_date = Column(Date, nullable=False)
     end_date = Column(Date, nullable=False)
-    
+
     # Relaciones
     trips = relationship("Trip", back_populates="service")
 
 
 class Trip(Base):
     __tablename__ = "trips"
-    
+
     trip_id = Column(Integer, primary_key=True, index=True)
     route_id = Column(Integer, ForeignKey('routes.route_id', ondelete='CASCADE'), index=True)
     service_id = Column(Integer, ForeignKey('calendar.service_id'), index=True)
@@ -132,8 +133,8 @@ class Trip(Base):
     shape_id = Column(Integer, ForeignKey('shapes.shape_id'))
     wheelchair_accessible = Column(Integer, default=0)
     bikes_allowed = Column(Integer, default=0)
-    created_at = Column(Date, default=datetime.utcnow)
-    
+    created_at = Column(Date, default=date.today)
+
     # Relaciones
     route = relationship("Route", back_populates="trips")
     service = relationship("Calendar", back_populates="trips")
@@ -142,7 +143,7 @@ class Trip(Base):
 
 class StopTime(Base):
     __tablename__ = "stop_times"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     trip_id = Column(Integer, ForeignKey('trips.trip_id', ondelete='CASCADE'), index=True)
     stop_id = Column(Integer, ForeignKey('stops.stop_id'), index=True)
@@ -154,7 +155,7 @@ class StopTime(Base):
     drop_off_type = Column(Integer, default=0)
     timepoint = Column(Integer, default=1)
     shape_dist_traveled = Column(DECIMAL(10, 3))
-    
+
     # Relaciones
     trip = relationship("Trip", back_populates="stop_times")
     stop = relationship("Stop", back_populates="stop_times")
@@ -162,7 +163,7 @@ class StopTime(Base):
 
 class RouteStop(Base):
     __tablename__ = "route_stops"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     route_id = Column(Integer, ForeignKey('routes.route_id', ondelete='CASCADE'), index=True)
     stop_id = Column(Integer, ForeignKey('stops.stop_id', ondelete='CASCADE'), index=True)
@@ -171,14 +172,14 @@ class RouteStop(Base):
     distance_from_start = Column(DECIMAL(10, 3))
     dwell_time = Column(Integer, default=0)
     is_timepoint = Column(Boolean, default=False)
-    
+
     # Relaciones
     route = relationship("Route", back_populates="route_stops")
 
 
 class Headway(Base):
     __tablename__ = "headways"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     route_id = Column(Integer, ForeignKey('routes.route_id', ondelete='CASCADE'), index=True)
     service_id = Column(Integer, ForeignKey('calendar.service_id'), index=True)
@@ -190,7 +191,7 @@ class Headway(Base):
 
 class TravelTime(Base):
     __tablename__ = "travel_times"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     route_id = Column(Integer, ForeignKey('routes.route_id', ondelete='CASCADE'), index=True)
     direction_id = Column(Integer, nullable=False)
@@ -202,7 +203,7 @@ class TravelTime(Base):
 
 class Timetable(Base):
     __tablename__ = "timetables"
-    
+
     timetable_id = Column(Integer, primary_key=True, index=True)
     route_id = Column(Integer, ForeignKey('routes.route_id'), index=True)
     service_id = Column(Integer, ForeignKey('calendar.service_id'), index=True)
@@ -212,4 +213,4 @@ class Timetable(Base):
     departure_b = Column(Time)
     arrival_a = Column(Time)
     round_trip_minutes = Column(Integer)
-    created_at = Column(Date, default=datetime.utcnow)
+    created_at = Column(Date, default=date.today)
