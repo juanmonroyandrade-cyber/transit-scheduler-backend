@@ -22,6 +22,14 @@ app.add_middleware(
 )
 
 # ============================================
+# IMPORTAR ROUTERS
+# ============================================
+from app.api import gtfs
+
+# Registrar routers
+app.include_router(gtfs.router)
+
+# ============================================
 # ENDPOINTS BÁSICOS
 # ============================================
 
@@ -31,13 +39,21 @@ async def root():
     return {
         "message": "Transit Scheduler API",
         "version": settings.API_VERSION,
-        "status": "running"
+        "status": "running",
+        "docs": "/docs"
     }
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy"}
+    from app.database import engine
+    try:
+        # Probar conexión a base de datos
+        with engine.connect() as conn:
+            conn.execute("SELECT 1")
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
 
 # ============================================
 # INICIALIZACIÓN
