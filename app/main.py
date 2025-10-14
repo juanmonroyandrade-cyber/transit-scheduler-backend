@@ -3,9 +3,21 @@ FastAPI Application - Transit Scheduler
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+
+# Importar configuración y base de datos
+from app.database import Base, engine, SessionLocal
+
+# Importar modelos ANTES de crear tablas (crítico)
+from app.models import gtfs_models
 
 # Importar routers
 from app.api import gtfs
+
+# Crear tablas si no existen
+print("🔧 Creando tablas en base de datos...")
+Base.metadata.create_all(bind=engine)
+print("✅ Tablas creadas/verificadas")
 
 # Crear aplicación FastAPI
 app = FastAPI(
@@ -17,7 +29,7 @@ app = FastAPI(
 # Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # En producción especifica dominios
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,9 +53,6 @@ async def root():
 @app.get("/health")
 async def health_check():
     """Health check con verificación de BD"""
-    from app.database import engine
-    from sqlalchemy import text
-    
     try:
         # Probar conexión a base de datos
         with engine.connect() as conn:
@@ -66,18 +75,6 @@ async def startup_event():
     print("🚀 Transit Scheduler API iniciada")
     print("📍 Versión: 1.0.0")
     print("📚 Documentación: /docs")
-    
-    # Intentar crear tablas (no crashea si falla)
-    try:
-        from app.database import Base, engine
-        from app.models import gtfs_models
-        
-        print("🔧 Creando tablas en base de datos...")
-        Base.metadata.create_all(bind=engine)
-        print("✅ Tablas creadas/verificadas")
-    except Exception as e:
-        print(f"⚠️ No se pudieron crear tablas: {e}")
-        print("⚠️ La API funcionará pero no podrás usar la base de datos")
 
 
 @app.on_event("shutdown")
