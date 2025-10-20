@@ -3,10 +3,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.gtfs_models import Agency, Calendar, FareAttribute, FareRule, FeedInfo, Route, Shape, StopTime, Stop, Trip
-from app.services.gtfs_importer import GTFSImporter  # ruta corregida
+from app.services.gtfs_importer import GTFSImporter
 
 router = APIRouter(prefix="/admin-web", tags=["Admin Web"])
 
+# Tablas del GTFS
 TABLES = {
     "agency": Agency,
     "calendar": Calendar,
@@ -20,6 +21,7 @@ TABLES = {
     "trips": Trip
 }
 
+# Dashboard HTML con carga de GTFS
 HTML_TEMPLATE = f"""
 <!DOCTYPE html>
 <html lang="es">
@@ -63,30 +65,16 @@ let currentTable = "{list(TABLES.keys())[0]}";
 let currentPage = 1;
 const pageSize = 100;
 
-// Función para subir GTFS
 async function uploadGTFS() {{
     const fileInput = document.getElementById('gtfsFile');
     if (!fileInput.files.length) return alert('Selecciona un archivo .zip');
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
-
-    document.getElementById('gtfsResult').innerText = "Cargando...";
-
-    try {{
-        const res = await fetch('/admin-web/upload-gtfs', {{ method: 'POST', body: formData }});
-        const data = await res.json();
-        if (res.ok) {{
-            document.getElementById('gtfsResult').innerText = JSON.stringify(data, null, 2);
-        }} else {{
-            document.getElementById('gtfsResult').innerText = "Error: " + (data.detail || JSON.stringify(data));
-        }}
-    }} catch (err) {{
-        document.getElementById('gtfsResult').innerText = "Error de conexión con el servidor";
-        console.error(err);
-    }}
+    const res = await fetch('/admin-web/upload-gtfs', {{ method: 'POST', body: formData }});
+    const data = await res.json();
+    document.getElementById('gtfsResult').innerText = JSON.stringify(data, null, 2);
 }}
 
-// Función para cargar tablas
 async function loadTable(table, page=1) {{
     currentTable = table;
     currentPage = page;
@@ -109,6 +97,7 @@ async function loadTable(table, page=1) {{
         </td>`;
         html += '</tr>';
     }});
+    // Fila nueva
     html += '<tr>';
     columns.forEach(col => html += `<td><input data-col="${{col}}" placeholder="Nuevo" data-type="string"></td>`);
     html += `<td><button onclick="addRow(this)">➕</button></td>`;
@@ -205,8 +194,19 @@ async def upload_gtfs(file: UploadFile = File(...), db: Session = Depends(get_db
         raise HTTPException(status_code=400, detail="Solo se permiten archivos .zip GTFS")
     try:
         content = await file.read()
+
+        # 🔹 BORRAR TODAS LAS TABLAS ANTES DE IMPORTAR
+        db.execute("PRAGMA foreign_keys=OFF;")
+        db.commit()
+        for table in [Trip, StopTime, Stop, Shape, Route, FareRule, FareAttribute, Calendar, Agency, FeedInfo]:
+            db.query(table).delete(synchronize_session=False)
+        db.commit()
+        db.execute("PRAGMA foreign_keys=ON;")
+        db.commit()
+
+        # Importar nuevo GTFS
         importer = GTFSImporter(db)
         result = importer.import_gtfs(content)
-        return JSONResponse(content=result)
+        return JSONResponse(content={"status": "success", "message": "GTFS importado correctamente", "details": result})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(content={"status": "error", "message": str(e)})
