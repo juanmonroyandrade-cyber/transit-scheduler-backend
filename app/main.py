@@ -1,83 +1,42 @@
-"""
-FastAPI Application - Transit Scheduler
-"""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
-
-# Importar configuración y base de datos
-from app.database import Base, engine, SessionLocal
-
-# Importar modelos ANTES de crear tablas (crítico)
-from app.models import gtfs_models
-
-# Importar routers
+from app.config import settings
 from app.api import gtfs
+from app.database import engine
+from app.models import gtfs_models
+from app.api import gtfs, kml  # Agregar kml
+from app.api import gtfs, kml, csv  # ✅ agregar csv
+from app.api import admin_web
+from app.api import admin
+from app.api import gtfs, kml, admin  # Agregar admin
 
-# Crear tablas si no existen
-print("🔧 Creando tablas en base de datos...")
-Base.metadata.create_all(bind=engine)
-print("✅ Tablas creadas/verificadas")
 
-# Crear aplicación FastAPI
-app = FastAPI(
-    title="Transit Scheduler API",
-    version="1.0.0",
-    description="Sistema de programación de rutas de transporte público"
-)
 
-# Configurar CORS
+import logging
+
+app = FastAPI(title=settings.API_TITLE, version=settings.API_VERSION)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción especifica dominios
+    allow_origins=getattr(settings, "ALLOWED_ORIGINS", ["http://localhost:3000"]),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Registrar routers
 app.include_router(gtfs.router)
-
-
-@app.get("/")
-async def root():
-    """Endpoint raíz"""
-    return {
-        "message": "Transit Scheduler API",
-        "version": "1.0.0",
-        "status": "running",
-        "docs": "/docs"
-    }
-
-
-@app.get("/health")
-async def health_check():
-    """Health check con verificación de BD"""
-    try:
-        # Probar conexión a base de datos
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return {
-            "status": "healthy",
-            "database": "connected"
-        }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "database": "disconnected",
-            "error": str(e)
-        }
+app.include_router(kml.router) 
+app.include_router(csv.router)  # ✅ nueva línea
+app.include_router(admin_web.router)
+app.include_router(admin.router)
+app.include_router(gtfs.router)
+app.include_router(kml.router)
+app.include_router(admin.router)  # AGREGAR ESTA LÍNEA
 
 
 @app.on_event("startup")
-async def startup_event():
-    """Ejecutar al iniciar la aplicación"""
-    print("🚀 Transit Scheduler API iniciada")
-    print("📍 Versión: 1.0.0")
-    print("📚 Documentación: /docs")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Ejecutar al cerrar la aplicación"""
-    print("👋 Transit Scheduler API detenida")
+def create_tables():
+    try:
+        gtfs_models.Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        logging.error("Error creando tablas en DB: %s", e)

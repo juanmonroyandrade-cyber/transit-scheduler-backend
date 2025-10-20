@@ -1,46 +1,25 @@
-"""
-Configuración de la base de datos SQLAlchemy
-"""
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, declarative_base
-from dotenv import load_dotenv
-import os
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from app.config import settings
+import logging
 
-# Cargar variables de entorno
-load_dotenv()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Obtener URL de la base de datos
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = settings.DATABASE_URL
 
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL no está definida en el archivo .env")
+logger.info(f"Connecting to database with URL: {DATABASE_URL}")
 
-# Crear engine
 engine = create_engine(
     DATABASE_URL,
-    echo=False,  # Cambiar a True para debug
-    pool_pre_ping=True,  # Verificar conexión antes de usar
-    pool_size=5,
-    max_overflow=10
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
 )
 
-# Session maker
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
-
-# Base para modelos
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-
-# Dependency para FastAPI
 def get_db():
-    """
-    Dependency que provee una sesión de base de datos
-    Se cierra automáticamente después de cada request
-    """
     db = SessionLocal()
     try:
         yield db
