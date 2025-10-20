@@ -1,359 +1,172 @@
-// src/components/TableViewer.jsx
-import { useEffect, useState } from "react";
+// frontend/src/components/TableViewer.jsx
 
-const TABLES = [
-  "agency", "routes", "stops", "trips", "stop_times",
-  "calendar", "fare_attributes", "fare_rules", "feed_info"
-];
+import { useState, useEffect, useCallback, useRef } from "react";
 
-export default function TableViewer() {
-  const [table, setTable] = useState("routes");
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [editingRow, setEditingRow] = useState(null);
-  const [editedData, setEditedData] = useState({});
-  const [newRow, setNewRow] = useState({});
-  const [message, setMessage] = useState(null);
-  const API_URL = "http://localhost:8000/admin";
-
-  const fetchData = () => {
-    setLoading(true);
-    setMessage(null);
-    fetch(`${API_URL}/${table}`)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(json => {
-        setData(Array.isArray(json) ? json : []);
-        setLoading(false);
-      })
-      .catch(err => {
-        console.error("Error cargando datos:", err);
-        setMessage({ type: "error", text: `Error cargando datos: ${err.message}` });
-        setData([]);
-        setLoading(false);
-      });
+// (El componente EditModal no necesita cambios)
+function EditModal({ item, columns, pkColumn, onSave, onCancel }) {
+  const [formData, setFormData] = useState(item || {});
+  const handleChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
+  const handleSubmit = (e) => { e.preventDefault(); onSave(formData); };
+  const isCreating = !item[pkColumn];
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+      <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <h2 className="text-xl font-bold mb-4">{isCreating ? 'Añadir' : 'Editar'} Registro</h2>
+        <form onSubmit={handleSubmit} className="space-y-4">{columns.map(col => (<div key={col.name}><label className="block text-sm font-medium text-gray-700 capitalize">{col.name.replace(/_/g, ' ')}</label><input type={col.type.includes('INTEGER') ? 'number' : col.type.includes('BOOLEAN') ? 'checkbox' : 'text'} name={col.name} value={formData[col.name] ?? ''} checked={col.type.includes('BOOLEAN') ? !!formData[col.name] : undefined} onChange={handleChange} disabled={col.name === pkColumn && !isCreating} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-gray-100"/></div>))}<div className="flex justify-end space-x-3 pt-4"><button type="button" onClick={onCancel} className="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">Cancelar</button><button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Guardar</button></div></form>
+      </div>
+    </div>
+  );
+}
+
+export default function TableViewer({ table }) {
+  const [data, setData] = useState([]);
+  const [columns, setColumns] = useState([]);
+  const [pkColumn, setPkColumn] = useState(null);
+  const [editingItem, setEditingItem] = useState(null);
+  
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const observer = useRef();
+  const lastRowRef = useCallback(node => {
+    if (loading) return;
+    if (observer.current) observer.current.disconnect();
+    observer.current = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting && hasMore) {
+        setPage(prevPage => prevPage + 1);
+      }
+    });
+    if (node) observer.current.observe(node);
+  }, [loading, hasMore]);
 
   useEffect(() => {
-    fetchData();
-    setEditingRow(null);
-    setNewRow({});
-    setMessage(null);
+    // Resetea todo cuando la tabla cambia
+    setData([]);
+    setColumns([]);
+    setPkColumn(null);
+    setPage(1);
+    setHasMore(true);
   }, [table]);
 
-  // Determinar la clave primaria según la tabla
-  const getPrimaryKey = (row) => {
-    if (table === "stops") return row.stop_id;
-    if (table === "routes") return row.route_id;
-    if (table === "trips") return row.trip_id;
-    if (table === "stop_times") return row.id;
-    if (table === "agency") return row.agency_id;
-    if (table === "calendar") return row.service_id;
-    if (table === "fare_attributes") return row.fare_id;
-    if (table === "fare_rules") return row.id;
-    return row.id;
-  };
-
-  const showMessage = (type, text) => {
-    setMessage({ type, text });
-    setTimeout(() => setMessage(null), 5000);
-  };
-
-  const handleDelete = async (row) => {
-    if (!confirm(`¿Estás seguro de eliminar este registro?`)) return;
+  useEffect(() => {
+    if (!hasMore && page > 1) return; // No cargar más si ya no hay
+    setLoading(true);
+    setError(null);
     
-    const pk = getPrimaryKey(row);
+    let isMounted = true;
+
+    const fetchData = async () => {
+      try {
+        if (columns.length === 0) {
+          const inspectRes = await fetch(`http://localhost:8000/admin/inspect/${table}`);
+          const inspectResult = await inspectRes.json();
+          if (isMounted) {
+            setColumns(inspectResult.columns);
+            setPkColumn(inspectResult.pk);
+          }
+        }
+        
+        const dataRes = await fetch(`http://localhost:8000/admin/${table}?page=${page}&per_page=50`);
+        const result = await dataRes.json();
+
+        if (isMounted) {
+          setData(prev => [...prev, ...result.data]);
+          setHasMore(result.page < result.total_pages);
+        }
+      } catch (err) {
+        if (isMounted) setError(err.message);
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    fetchData();
+    return () => { isMounted = false; };
+  }, [table, page]);
+
+  const refreshData = async () => {
+    setData([]);
+    setPage(1);
+    setHasMore(true);
+  };
+  
+  // (Las funciones handleSave, handleDelete y handleCreate se actualizan para llamar a refreshData)
+  const handleSave = async (itemToSave) => {
+    const isCreating = !itemToSave[pkColumn];
+    const url = isCreating ? `http://localhost:8000/admin/${table}` : `http://localhost:8000/admin/${table}/${encodeURIComponent(itemToSave[pkColumn])}`;
+    const method = isCreating ? 'POST' : 'PUT';
     
     try {
-      const res = await fetch(`${API_URL}/${table}/${pk}`, { 
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" }
-      });
-      
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(itemToSave) });
       const result = await res.json();
-      
-      if (res.ok) {
-        showMessage("success", result.message || "Registro eliminado correctamente");
-        fetchData();
-      } else {
-        showMessage("error", result.detail || "Error al eliminar");
-      }
-    } catch (err) {
-      console.error("Error:", err);
-      showMessage("error", `Error de conexión: ${err.message}`);
-    }
+      if (!res.ok) throw new Error(result.detail || 'Error al guardar.');
+      setEditingItem(null);
+      refreshData();
+    } catch (err) { alert(`Error: ${err.message}`); }
   };
 
-  const handleEdit = (row) => {
-    setEditingRow(row);
-    setEditedData({...row});
-  };
-
-  const handleCancelEdit = () => {
-    setEditingRow(null);
-    setEditedData({});
-  };
-
-  const handleSave = async () => {
-    const pk = getPrimaryKey(editingRow);
-    
+  const handleDelete = async (item) => {
+    if (!pkColumn || !item[pkColumn] || !window.confirm("¿Seguro?")) return;
     try {
-      const res = await fetch(`${API_URL}/${table}/${pk}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editedData),
-      });
-      
+      const res = await fetch(`http://localhost:8000/admin/${table}/${encodeURIComponent(item[pkColumn])}`, { method: 'DELETE' });
       const result = await res.json();
-      
-      if (res.ok) {
-        showMessage("success", result.message || "Registro actualizado correctamente");
-        setEditingRow(null);
-        setEditedData({});
-        fetchData();
-      } else {
-        showMessage("error", result.detail || "Error al actualizar");
-      }
-    } catch (err) {
-      console.error("Error:", err);
-      showMessage("error", `Error de conexión: ${err.message}`);
-    }
+      if (!res.ok) throw new Error(result.detail || 'Error al eliminar.');
+      refreshData();
+    } catch (err) { alert(`Error: ${err.message}`); }
   };
-
-  const handleAdd = async () => {
-    // Validar que haya al menos un campo lleno
-    const filledFields = Object.entries(newRow).filter(([k, v]) => v && v.toString().trim() !== "");
-    
-    if (filledFields.length === 0) {
-      showMessage("error", "Completa al menos un campo");
-      return;
-    }
-
-    // Limpiar campos vacíos
-    const cleanedData = {};
-    filledFields.forEach(([k, v]) => {
-      cleanedData[k] = v;
-    });
-
-    try {
-      const res = await fetch(`${API_URL}/${table}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(cleanedData),
-      });
-      
-      const result = await res.json();
-      
-      if (res.ok) {
-        showMessage("success", result.message || "Registro agregado correctamente");
-        setNewRow({});
-        fetchData();
-      } else {
-        showMessage("error", result.detail || "Error al agregar");
-      }
-    } catch (err) {
-      console.error("Error:", err);
-      showMessage("error", `Error de conexión: ${err.message}`);
-    }
+  
+  const handleCreate = () => {
+    const newItem = columns.reduce((acc, col) => ({...acc, [col.name]: col.type.includes('BOOLEAN') ? false : ''}), {});
+    setEditingItem(newItem);
   };
-
-  const handleInputChange = (key, value, isEdit = false) => {
-    if (isEdit) {
-      setEditedData(prev => ({...prev, [key]: value}));
-    } else {
-      setNewRow(prev => ({...prev, [key]: value}));
-    }
-  };
-
-  const keys = data[0] ? Object.keys(data[0]) : [];
+  
+  if (columns.length === 0 && loading) return <p className="p-4">Cargando tabla "{table}"...</p>;
+  if (error) return <p className="p-4 text-red-500 bg-red-100 rounded">Error: {error}</p>;
 
   return (
-    <div className="p-6 w-full h-screen overflow-y-auto bg-gray-50">
-      <div className="max-w-full">
-        <h2 className="text-3xl font-bold mb-6 text-gray-800">📊 Editor de Tablas GTFS</h2>
-        
-        {/* Mensaje de feedback */}
-        {message && (
-          <div className={`mb-4 p-4 rounded-lg ${
-            message.type === "success" 
-              ? "bg-green-100 border border-green-400 text-green-700" 
-              : "bg-red-100 border border-red-400 text-red-700"
-          }`}>
-            <div className="flex items-center gap-2">
-              <span className="text-xl">{message.type === "success" ? "✅" : "❌"}</span>
-              <span className="font-medium">{message.text}</span>
-            </div>
-          </div>
-        )}
-        
-        {/* Selector de tablas */}
-        <div className="flex gap-2 mb-6 flex-wrap">
-          {TABLES.map((t) => (
-            <button
-              key={t}
-              onClick={() => setTable(t)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all transform hover:scale-105 ${
-                table === t 
-                  ? "bg-gradient-to-r from-blue-600 to-purple-600 text-white shadow-lg" 
-                  : "bg-white text-gray-700 hover:bg-gray-100 border border-gray-300"
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
+    <div className="p-6 h-full flex flex-col">
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold capitalize">{table.replace(/_/g, ' ')}</h1>
+        <button onClick={handleCreate} className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">Añadir Registro</button>
+      </div>
 
-        {loading ? (
-          <div className="text-center py-12">
-            <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-            <p className="text-gray-600">Cargando datos...</p>
-          </div>
-        ) : data.length === 0 ? (
-          <div className="text-center py-12 bg-white rounded-lg shadow">
-            <p className="text-gray-500 text-lg">📭 No hay datos en esta tabla</p>
-            <p className="text-gray-400 text-sm mt-2">Agrega el primer registro usando el formulario abajo</p>
-          </div>
-        ) : (
-          <>
-            {/* Tabla de datos */}
-            <div className="bg-white rounded-lg shadow-lg overflow-hidden mb-6">
-              <div className="overflow-x-auto">
-                <table className="table-auto w-full text-sm">
-                  <thead className="bg-gradient-to-r from-gray-100 to-gray-200">
-                    <tr>
-                      {keys.map((k) => (
-                        <th key={k} className="px-4 py-3 text-left font-semibold text-gray-700 border-b-2 border-gray-300">
-                          {k}
-                        </th>
-                      ))}
-                      <th className="px-4 py-3 text-left font-semibold text-gray-700 border-b-2 border-gray-300 sticky right-0 bg-gray-100">
-                        Acciones
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.map((row, i) => (
-                      <tr 
-                        key={i} 
-                        className={`${
-                          editingRow === row 
-                            ? "bg-blue-50" 
-                            : "odd:bg-white even:bg-gray-50"
-                        } hover:bg-blue-100 transition-colors`}
-                      >
-                        {keys.map((k) => (
-                          <td key={k} className="px-4 py-3 border-b border-gray-200">
-                            {editingRow === row ? (
-                              <input
-                                type="text"
-                                value={editedData[k] ?? ""}
-                                onChange={(e) => handleInputChange(k, e.target.value, true)}
-                                className="w-full border border-blue-300 rounded px-2 py-1 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                              />
-                            ) : (
-                              <span className="text-gray-800">
-                                {row[k]?.toString() || <span className="text-gray-400 italic">null</span>}
-                              </span>
-                            )}
-                          </td>
-                        ))}
-                        <td className="px-4 py-3 border-b border-gray-200 sticky right-0 bg-inherit">
-                          {editingRow === row ? (
-                            <div className="flex gap-2">
-                              <button 
-                                onClick={handleSave} 
-                                className="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-md text-xs font-medium transition-all shadow-sm hover:shadow-md"
-                              >
-                                💾 Guardar
-                              </button>
-                              <button 
-                                onClick={handleCancelEdit} 
-                                className="bg-gray-400 hover:bg-gray-500 text-white px-3 py-1.5 rounded-md text-xs font-medium transition-all"
-                              >
-                                ✖️ Cancelar
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="flex gap-2">
-                              <button 
-                                onClick={() => handleEdit(row)} 
-                                className="bg-yellow-400 hover:bg-yellow-500 text-gray-800 px-3 py-1.5 rounded-md text-xs font-medium transition-all shadow-sm hover:shadow-md"
-                              >
-                                ✏️ Editar
-                              </button>
-                              <button 
-                                onClick={() => handleDelete(row)} 
-                                className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-md text-xs font-medium transition-all shadow-sm hover:shadow-md"
-                              >
-                                🗑️ Eliminar
-                              </button>
-                            </div>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+      {editingItem && <EditModal item={editingItem} columns={columns} pkColumn={pkColumn} onSave={handleSave} onCancel={() => setEditingItem(null)} />}
 
-              {/* Contador de registros */}
-              <div className="px-4 py-3 bg-gray-50 border-t border-gray-200">
-                <p className="text-sm text-gray-600">
-                  📊 Total de registros: <span className="font-semibold">{data.length}</span>
-                </p>
-              </div>
-            </div>
-          </>
-        )}
-
-        {/* Formulario para agregar nueva fila */}
-        <div className="bg-white rounded-lg shadow-lg p-6 border-2 border-dashed border-gray-300">
-          <h3 className="font-bold text-xl mb-4 text-gray-800 flex items-center gap-2">
-            <span className="text-2xl">➕</span>
-            Agregar nuevo registro en <span className="text-blue-600">{table}</span>
-          </h3>
-          
-          {keys.length === 0 ? (
-            <p className="text-gray-400 italic">Primero carga una tabla con datos para ver los campos</p>
-          ) : (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-4">
-                {keys.map((k) => (
-                  <div key={k} className="flex flex-col">
-                    <label className="text-xs font-semibold text-gray-600 mb-1.5">
-                      {k}
-                    </label>
-                    <input
-                      type="text"
-                      placeholder={`Ingresa ${k}...`}
-                      value={newRow[k] || ""}
-                      onChange={(e) => handleInputChange(k, e.target.value, false)}
-                      className="border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 focus:outline-none transition-all"
-                    />
-                  </div>
-                ))}
-              </div>
-              
-              <div className="flex gap-3">
-                <button 
-                  onClick={handleAdd} 
-                  className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-6 py-3 rounded-lg font-semibold transition-all transform hover:scale-105 shadow-lg hover:shadow-xl"
-                >
-                  ➕ Agregar Registro
-                </button>
-                
-                <button 
-                  onClick={() => setNewRow({})} 
-                  className="bg-gray-300 hover:bg-gray-400 text-gray-700 px-6 py-3 rounded-lg font-medium transition-all"
-                >
-                  🗑️ Limpiar Formulario
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+      <div className="flex-grow overflow-auto bg-white rounded-lg shadow">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50 sticky top-0">
+            <tr>
+              {columns.map(col => <th key={col.name} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{col.name.replace(/_/g, ' ')}</th>)}
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {data.map((row, index) => {
+              const rowContent = (
+                <tr key={row[pkColumn] || index} className="hover:bg-gray-50">
+                  {columns.map(col => <td key={col.name} className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{typeof row[col.name] === 'boolean' ? (row[col.name] ? 'Sí' : 'No') : String(row[col.name])}</td>)}
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-4">
+                    <button onClick={() => setEditingItem(row)} className="text-indigo-600 hover:text-indigo-900">Editar</button>
+                    <button onClick={() => handleDelete(row)} className="text-red-600 hover:text-red-900">Eliminar</button>
+                  </td>
+                </tr>
+              );
+              // Asigna la ref al último elemento para disparar la carga
+              if (data.length === index + 1) {
+                return <>{React.cloneElement(rowContent, { ref: lastRowRef })}</>;
+              }
+              return rowContent;
+            })}
+          </tbody>
+        </table>
+        {loading && <div className="text-center p-4">Cargando más registros...</div>}
+        {!hasMore && data.length > 0 && <div className="text-center p-4 text-gray-500">Fin de los registros.</div>}
+        {data.length === 0 && !loading && <div className="text-center py-8 text-gray-500">No hay registros en esta tabla.</div>}
       </div>
     </div>
   );

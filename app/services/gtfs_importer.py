@@ -7,7 +7,9 @@ from io import BytesIO
 from typing import Dict, BinaryIO
 from datetime import datetime, time
 from sqlalchemy.orm import Session
+import traceback
 
+# Importa todos los modelos para poder limpiarlos
 from app.models.gtfs_models import (
     Agency,
     Calendar,
@@ -21,91 +23,62 @@ from app.models.gtfs_models import (
     Trip,
 )
 
-
-
 class GTFSImporter:
     """Importador de archivos GTFS"""
     
     def __init__(self, db: Session):
         self.db = db
         self.agency_id = None
-    
-    def _safe_int(self, value, default=None):
-        """Convierte valor a int de forma segura"""
+
+    # --- INICIO DE LA SECCIÓN CORREGIDA ---
+
+    def _clear_existing_data(self):
+        """
+        Elimina todos los registros de las tablas GTFS.
+        El orden es crucial para no violar las restricciones de llaves foráneas.
+        """
         try:
-            if pd.isna(value):
-                return default
-            return int(value)
-        except (ValueError, TypeError):
-            return default
-    
-    def _safe_str(self, value, default=""):
-        """Convierte valor a string de forma segura"""
-        try:
-            if pd.isna(value):
-                return default
-            return str(value).strip()
-        except (ValueError, TypeError):
-            return default
-    
-    def _parse_time_safe(self, value):
-        """Convierte string GTFS time a Python time (maneja >24:00:00)"""
-        if pd.isna(value):
-            return None
-        
-        s = str(value).strip()
-        try:
-            parts = s.split(":")
-            h = int(parts[0]) if len(parts) > 0 else 0
-            m = int(parts[1]) if len(parts) > 1 else 0
-            sec = int(parts[2]) if len(parts) > 2 else 0
+            print("🗑️ Limpiando datos GTFS existentes...")
             
-            # Normalizar horas > 24
-            h_norm = h % 24
-            return time(h_norm, m, sec)
+            # Se eliminan primero las tablas con dependencias (llaves foráneas)
+            self.db.query(StopTime).delete(synchronize_session=False)
+            self.db.query(Trip).delete(synchronize_session=False)
+            self.db.query(FareRule).delete(synchronize_session=False)
+            self.db.query(Route).delete(synchronize_session=False)
+            
+            # Ahora se pueden eliminar las tablas de las que dependían las anteriores
+            self.db.query(Stop).delete(synchronize_session=False)
+            self.db.query(Calendar).delete(synchronize_session=False)
+            self.db.query(FareAttribute).delete(synchronize_session=False)
+            self.db.query(Agency).delete(synchronize_session=False)
+            
+            # Finalmente, las tablas sin dependencias
+            self.db.query(Shape).delete(synchronize_session=False)
+            self.db.query(FeedInfo).delete(synchronize_session=False)
+            
+            self.db.commit()
+            print("✅ Limpieza completada.")
         except Exception as e:
-            print(f"Error parsing time '{value}': {e}")
-            return None
-    
-    def _parse_date_safe(self, value):
-        """Convierte string GTFS date (YYYYMMDD) a Python date"""
-        if pd.isna(value):
-            return None
-        
-        try:
-            s = str(value).strip()
-            return datetime.strptime(s, "%Y%m%d").date()
-        except Exception as e:
-            print(f"Error parsing date '{value}': {e}")
-            return None
+            print(f"❌ Error durante la limpieza de datos: {e}")
+            self.db.rollback()
+            raise  # Vuelve a lanzar la excepción para que sea manejada por el endpoint
 
     def import_gtfs(self, gtfs_zip: BinaryIO, agency_name: str = None) -> Dict:
         """
-        Importa un archivo GTFS completo
-        
-        Args:
-            gtfs_zip: Archivo ZIP binario del GTFS
-            agency_name: Nombre opcional para override
-            
-        Returns:
-            Dict con estadísticas de importación
+        Importa un archivo GTFS completo, limpiando los datos anteriores primero.
         """
         try:
-            # Leer el contenido del archivo
+            # 1. Limpiar todos los datos GTFS existentes
+            self._clear_existing_data()
+
+            # 2. Continuar con la importación como antes
             content = gtfs_zip.read() if hasattr(gtfs_zip, 'read') else gtfs_zip
             
             with ZipFile(BytesIO(content)) as zip_ref:
                 results = {
-                    "agency": 0,
-                    "calendar": 0,
-                    "fare_attributes": 0,
-                    "fare_rules": 0,
-                    "feed_info": 0,
-                    "routes": 0,
-                    "shapes": 0,
-                    "stops": 0,
-                    "stop_times": 0,
-                    "trips": 0
+                    "agency": 0, "calendar": 0, "fare_attributes": 0,
+                    "fare_rules": 0, "feed_info": 0, "routes": 0,
+                    "shapes": 0, "stops": 0, "stop_times": 0, "trips": 0
                 }
                 
                 filenames = zip_ref.namelist()
@@ -167,9 +140,59 @@ class GTFSImporter:
         except Exception as e:
             self.db.rollback()
             print(f"❌ Error en importación: {e}")
-            import traceback
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
+    
+    # --- FIN DE LA SECCIÓN CORREGIDA ---
+    
+    def _safe_int(self, value, default=None):
+        """Convierte valor a int de forma segura"""
+        try:
+            if pd.isna(value):
+                return default
+            return int(value)
+        except (ValueError, TypeError):
+            return default
+    
+    def _safe_str(self, value, default=""):
+        """Convierte valor a string de forma segura"""
+        try:
+            if pd.isna(value):
+                return default
+            return str(value).strip()
+        except (ValueError, TypeError):
+            return default
+    
+    def _parse_time_safe(self, value):
+        """Convierte string GTFS time a Python time (maneja >24:00:00)"""
+        if pd.isna(value):
+            return None
+        
+        s = str(value).strip()
+        try:
+            parts = s.split(":")
+            h = int(parts[0]) if len(parts) > 0 else 0
+            m = int(parts[1]) if len(parts) > 1 else 0
+            sec = int(parts[2]) if len(parts) > 2 else 0
+            
+            # Normalizar horas > 24
+            h_norm = h % 24
+            return time(h_norm, m, sec)
+        except Exception as e:
+            print(f"Error parsing time '{value}': {e}")
+            return None
+    
+    def _parse_date_safe(self, value):
+        """Convierte string GTFS date (YYYYMMDD) a Python date"""
+        if pd.isna(value):
+            return None
+        
+        try:
+            s = str(value).strip()
+            return datetime.strptime(s, "%Y%m%d").date()
+        except Exception as e:
+            print(f"Error parsing date '{value}': {e}")
+            return None
 
     def _import_agency(self, zip_ref, override_name=None):
         """Importa agency.txt"""
@@ -268,13 +291,15 @@ class GTFSImporter:
         try:
             info = FeedInfo(
                 feed_publisher_name=self._safe_str(df.iloc[0]["feed_publisher_name"]),
-                feed_publisher_url=self._safe_str(df.iloc[0]["feed_publisher_url"]),
-                feed_lang=self._safe_str(df.iloc[0]["feed_lang"]),
-                feed_start_date=self._parse_date_safe(df.iloc[0]["feed_start_date"]),
-                feed_end_date=self._parse_date_safe(df.iloc[0]["feed_end_date"]),
+                feed_publisher_url=self._safe_str(df.iloc[0].get("feed_publisher_url")),
+                feed_lang=self._safe_str(df.iloc[0].get("feed_lang")),
+                feed_start_date=self._parse_date_safe(df.iloc[0].get("feed_start_date")),
+                feed_end_date=self._parse_date_safe(df.iloc[0].get("feed_end_date")),
                 feed_version=self._safe_str(df.iloc[0].get("feed_version")),
                 default_lang=self._safe_str(df.iloc[0].get("default_lang")),
-                feed_contact_url=self._safe_str(df.iloc[0].get("feed_contact_url"))
+                feed_contact_url=self._safe_str(df.iloc[0].get("feed_contact_url")),
+                # ✅ LÍNEA AÑADIDA para el campo que faltaba
+                feed_contact_email=self._safe_str(df.iloc[0].get("feed_contact_email"))
             )
             self.db.add(info)
             self.db.commit()
