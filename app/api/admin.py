@@ -7,7 +7,7 @@ from typing import Dict, Any
 import math
 import time
 import traceback
-from datetime import date, time as dt_time # Importar tipos necesarios
+from datetime import date, time as dt_time
 
 from app.database import get_db
 from app.models import gtfs_models
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 MODEL_MAP = {model.__tablename__: model for model in gtfs_models.Base.__subclasses__()}
 
-# --- Función Auxiliar get_model_and_pk (Sin cambios respecto a la versión anterior con logs) ---
+# --- Función Auxiliar get_model_and_pk (Sin cambios) ---
 def get_model_and_pk(table_name: str):
     print(f"[get_model_and_pk] Buscando modelo para tabla: {table_name}")
     if table_name not in MODEL_MAP:
@@ -45,7 +45,7 @@ def get_model_and_pk(table_name: str):
 async def get_tables():
     return sorted(list(MODEL_MAP.keys()))
 
-# --- Endpoint /inspect/{table_name} (Sin cambios respecto a la versión anterior con logs) ---
+# --- Endpoint /inspect/{table_name} (Sin cambios) ---
 @router.get("/inspect/{table_name}")
 async def inspect_table(table_name: str):
     print(f"[Inspect API] Solicitud para inspeccionar tabla: {table_name}")
@@ -63,59 +63,39 @@ async def inspect_table(table_name: str):
          traceback.print_exc()
          raise HTTPException(status_code=500, detail=f"Error interno al inspeccionar '{table_name}': {str(e)}")
 
-# --- ✅ Endpoint /{table_name} CON LÍMITE AUMENTADO ---
+# --- ✅ Endpoint /{table_name} MODIFICADO (sin paginación) ---
 @router.get("/{table_name}")
 async def get_table_data(
-    table_name: str,
-    db: Session = Depends(get_db),
-    page: int = Query(1, description="Número de página", ge=1),
-    # Aumentamos el límite superior (le) a 1000 o más si es necesario
-    per_page: int = Query(50, description="Registros por página", ge=10, le=1000)
+    table_name: str, 
+    db: Session = Depends(get_db)
 ):
-    """Obtiene los registros de una tabla de forma paginada."""
-    print(f"[Data API] Solicitud tabla: {table_name}, pág: {page}, per_page: {per_page}")
-    req_start_time = time.time()
+    """Obtiene TODOS los registros de una tabla."""
+    print(f"[Data API] Solicitud para TODOS los registros de: {table_name}")
+    data_start_time = time.time()
     try:
         model, pk_col = get_model_and_pk(table_name)
-
-        # Contar total
-        count_start = time.time()
-        total_records = db.query(func.count(getattr(model, pk_col))).scalar() or 0
-        count_duration = time.time() - count_start
-        print(f"  > Total records ({table_name}): {total_records} ({(count_duration)*1000:.1f} ms)")
-
-        total_pages = math.ceil(total_records / per_page) if total_records > 0 else 1
-        # Validar página solicitada
-        if page > total_pages:
-            # Devolver lista vacía si se pide una página que no existe
-             print(f"  -> Página {page} solicitada excede total {total_pages}. Devolviendo vacío.")
-             return {"data": [], "page": page, "per_page": per_page, "total_pages": total_pages, "total_records": total_records}
-             # Alternativa: Lanzar error 404
-             # raise HTTPException(status_code=404, detail=f"Página {page} no existe. Total: {total_pages}")
-
-        offset = (page - 1) * per_page
-
-        # Obtener datos
-        data_start = time.time()
-        # Ordenar por PK para paginación consistente
-        data = db.query(model).order_by(getattr(model, pk_col)).offset(offset).limit(per_page).all()
-        data_duration = time.time() - data_start
-        print(f"  > Obtenidos {len(data)} registros ({table_name}) ({(data_duration)*1000:.1f} ms)")
-
-        response = {"data": data, "page": page, "per_page": per_page, "total_pages": total_pages, "total_records": total_records}
-        print(f"  -> Respuesta enviada para {table_name} p.{page}. Request time: {time.time() - req_start_time:.3f} s")
-        return response
-
+        
+        # Obtiene TODOS los datos, ordenados por la PK para consistencia
+        data = db.query(model).order_by(getattr(model, pk_col)).all()
+        
+        total_request_time = time.time() - data_start_time
+        print(f"  -> Obtenidos {len(data)} registros ({table_name}). Total time: {total_request_time:.3f} s")
+        
+        # Devuelve la lista de datos directamente
+        return data
+        
     except HTTPException as http_exc:
-        print(f"  -> Error HTTP (prob. de get_model_and_pk) para {table_name}: {http_exc.detail}")
+        print(f"  -> Error HTTP al obtener datos de {table_name}: {http_exc.detail}")
         raise http_exc
     except Exception as e:
         print(f"  -> Error inesperado al obtener datos de {table_name}: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error interno al obtener '{table_name}': {str(e)}")
 
-# --- Función auxiliar _convert_value (Sin cambios respecto a la versión anterior) ---
+
+# --- Función auxiliar _convert_value (Sin cambios) ---
 def _convert_value(value: Any, col: Any) -> Any:
+    # ... (tu código de conversión de tipos va aquí) ...
     col_type_str = str(col.type).upper()
     target_value = None
     if value is None or value == '':
@@ -139,9 +119,10 @@ def _convert_value(value: Any, col: Any) -> Any:
             raise ValueError(f"Valor '{value}'. No se pudo convertir a {error_type_guess}. ({conv_err})")
     return target_value
 
-# --- Endpoint POST /{table_name} (Sin cambios respecto a la versión anterior) ---
+# --- Endpoint POST /{table_name} (Sin cambios) ---
 @router.post("/{table_name}")
 async def create_table_item(table_name: str, item_data: Dict[str, Any], db: Session = Depends(get_db)):
+    # ... (código igual) ...
     print(f"[Admin POST API] Creando en {table_name}: {item_data}")
     try:
         model, pk_col = get_model_and_pk(table_name)
@@ -160,9 +141,10 @@ async def create_table_item(table_name: str, item_data: Dict[str, Any], db: Sess
     except HTTPException as http_exc: db.rollback(); print(f"  -> Error HTTP: {http_exc.detail}"); raise http_exc
     except Exception as e: db.rollback(); print(f"  -> Error DB/inesperado: {e}"); traceback.print_exc(); raise HTTPException(status_code=400, detail=f"Error al crear en '{table_name}': {e}")
 
-# --- Endpoint PUT /{table_name}/{item_id} (Sin cambios respecto a la versión anterior) ---
+# --- Endpoint PUT /{table_name}/{item_id} (Sin cambios) ---
 @router.put("/{table_name}/{item_id}")
 async def update_table_item(table_name: str, item_id: Any, item_data: Dict[str, Any], db: Session = Depends(get_db)):
+    # ... (código igual) ...
     print(f"[Admin PUT API] Actualizando {item_id} en {table_name}: {item_data}")
     try:
         model, pk_column_name = get_model_and_pk(table_name)
@@ -189,9 +171,10 @@ async def update_table_item(table_name: str, item_id: Any, item_data: Dict[str, 
     except HTTPException as http_exc: db.rollback(); print(f"  -> Error HTTP: {http_exc.detail}"); raise http_exc
     except Exception as e: db.rollback(); print(f"  -> Error DB/inesperado: {e}"); traceback.print_exc(); raise HTTPException(status_code=400, detail=f"Error al actualizar en '{table_name}': {e}")
 
-# --- Endpoint DELETE /{table_name}/{item_id} (Sin cambios respecto a la versión anterior) ---
+# --- Endpoint DELETE /{table_name}/{item_id} (Sin cambios) ---
 @router.delete("/{table_name}/{item_id}")
 async def delete_table_item(table_name: str, item_id: Any, db: Session = Depends(get_db)):
+    # ... (código igual) ...
     print(f"[Admin DELETE API] Eliminando {item_id} de {table_name}")
     try:
         model, pk_column_name = get_model_and_pk(table_name)
