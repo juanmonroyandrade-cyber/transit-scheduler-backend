@@ -1,4 +1,5 @@
-// ✅ Recibe gtfsTables como prop desde App.jsx
+// frontend/src/components/Sidebar.jsx
+
 export default function Sidebar({ setActiveView, activeView, gtfsTables }) {
 
   const getLinkClass = (view) => 
@@ -17,12 +18,15 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables }) {
           <h3 className="px-4 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Principal</h3>
           <a href="#" onClick={() => setActiveView("upload")} className={getLinkClass("upload")}>Cargar GTFS</a>
           <a href="#" onClick={() => setActiveView("map")} className={getLinkClass("map")}>Visualizador de Mapa</a>
+          {/* ✅ Nuevo enlace para crear ruta */}
+          <a href="#" onClick={() => setActiveView("create_route_kml")} className={getLinkClass("create_route_kml")}>
+              Crear Ruta KML
+          </a>
         </div>
         {/* Editor GTFS */}
-        <div className="flex-grow overflow-y-auto"> {/* Permite scroll si hay muchas tablas */}
+        <div className="flex-grow overflow-y-auto">
           <h3 className="px-4 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Editor GTFS</h3>
-          {/* Ordena alfabéticamente */}
-          {[...gtfsTables].sort().map((table) => ( 
+          {[...(gtfsTables || [])].sort().map((table) => ( 
             <a key={table} href="#" onClick={() => setActiveView(table)} className={getLinkClass(table)}>
               {table.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
             </a>
@@ -31,7 +35,7 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables }) {
       </nav>
       {/* Footer */}
       <div className="mt-auto pt-4 border-t border-gray-200">
-          <p className="text-xs text-center text-gray-400">Versión 1.2</p>
+          <p className="text-xs text-center text-gray-400">Versión 1.3</p> 
       </div>
     </aside>
   );

@@ -1,20 +1,23 @@
 # app/api/gtfs.py
+
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
-from sqlalchemy.orm import Session
-from sqlalchemy import distinct
+from sqlalchemy.orm import Session, joinedload, aliased # Importar aliased
+from sqlalchemy import distinct, asc # Importar asc para ordenar
 from typing import Optional
 from collections import defaultdict
-import time 
+import time
 
 from app.database import get_db
 from app.services.gtfs_importer import GTFSImporter
-from app.models.gtfs_models import Route, Stop, Shape, Trip, StopTime
+# Asegúrate de importar todos los modelos necesarios
+from app.models.gtfs_models import Route, Stop, Shape, Trip, StopTime 
 
 router = APIRouter(prefix="/gtfs", tags=["GTFS"])
 
-# --- Endpoint de importación (se mantiene igual) ---
+# --- Endpoint de importación (sin cambios) ---
 @router.post("/import")
 async def import_gtfs( file: UploadFile = File(...), agency_name: Optional[str] = Form(None), db: Session = Depends(get_db)):
+    # ... (código se mantiene igual)
     try:
         importer = GTFSImporter(db)
         result = importer.import_gtfs(file.file, agency_name)
@@ -22,89 +25,131 @@ async def import_gtfs( file: UploadFile = File(...), agency_name: Optional[str] 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-# --- ENDPOINT DEL MAPA: SÚPER OPTIMIZADO V2 ---
+
+# --- ENDPOINT DEL MAPA: OPTIMIZADO CON ORDEN Y DIRECCIÓN DE PARADAS ---
 @router.get("/routes-with-details")
 async def get_routes_with_details(db: Session = Depends(get_db)):
+    """
+    Endpoint optimizado que devuelve rutas con trazados y paradas
+    ordenadas por secuencia y agrupadas por dirección (sentido).
+    """
     start_time = time.time()
-    print("🚀 Iniciando consulta optimizada V2...")
+    print("🚀 Iniciando consulta optimizada V3 (con orden y dirección)...")
     try:
-        # 1. Consultas masivas
+        # 1. Carga masiva de datos base
         print("   - Cargando rutas...")
         routes = db.query(Route).all()
-        print(f"   - Rutas cargadas: {len(routes)} ({time.time() - start_time:.2f}s)")
+        print(f"     -> {len(routes)} rutas cargadas.")
 
         print("   - Cargando paradas...")
-        stops_query_start = time.time()
         stops = db.query(Stop.stop_id, Stop.stop_name, Stop.stop_lat, Stop.stop_lon).all()
         stops_map = {s.stop_id: {"stop_id": s.stop_id, "stop_name": s.stop_name, "stop_lat": s.stop_lat, "stop_lon": s.stop_lon} for s in stops}
-        print(f"   - Paradas cargadas y mapeadas: {len(stops_map)} ({time.time() - stops_query_start:.2f}s)")
-        
-        print("   - Cargando viajes...")
-        trips_query_start = time.time()
-        trips = db.query(Trip.trip_id, Trip.route_id, Trip.shape_id).all()
-        print(f"   - Viajes cargados: {len(trips)} ({time.time() - trips_query_start:.2f}s)")
-        
-        print("   - Cargando stop_times...")
-        stop_times_query_start = time.time()
-        # Optimización: Cargar como tuplas es más rápido
-        stop_times_tuples = db.query(StopTime.trip_id, StopTime.stop_id).distinct().all()
-        print(f"   - StopTimes cargados: {len(stop_times_tuples)} ({time.time() - stop_times_query_start:.2f}s)")
+        print(f"     -> {len(stops_map)} paradas mapeadas.")
         
         print("   - Cargando shapes...")
-        shapes_query_start = time.time()
-        # Optimización: Cargar como tuplas
         shapes_tuples = db.query(Shape.shape_id, Shape.shape_pt_lat, Shape.shape_pt_lon, Shape.shape_pt_sequence).order_by(Shape.shape_id, Shape.shape_pt_sequence).all()
-        print(f"   - Shapes cargados: {len(shapes_tuples)} ({time.time() - shapes_query_start:.2f}s)")
-
-        # 2. Procesar shapes en diccionario
-        print("   - Procesando shapes...")
-        shapes_process_start = time.time()
         shapes_map = defaultdict(list)
         for shape_id, lat, lon, _ in shapes_tuples:
             shapes_map[shape_id].append([lat, lon])
-        print(f"   - Shapes procesados. ({time.time() - shapes_process_start:.2f}s)")
+        print(f"     -> {len(shapes_map)} shapes procesados.")
 
-        # 3. Construir relaciones
-        print("   - Construyendo relaciones...")
-        relations_start = time.time()
-        route_to_trips = defaultdict(list)
-        trip_ids_in_routes = set() 
-        for trip in trips:
-            route_to_trips[trip.route_id].append(trip)
-            trip_ids_in_routes.add(trip.trip_id)
+        # 2. Consulta optimizada para Trips y StopTimes CON ORDEN Y DIRECCIÓN
+        print("   - Cargando y procesando viajes y tiempos de parada (ordenados)...")
+        trips_stoptimes_start = time.time()
+        
+        # Obtenemos Trip (con route_id, shape_id, direction_id) y StopTime (con stop_id, stop_sequence)
+        # Ordenamos por route_id, direction_id, trip_id (para agrupar), y stop_sequence
+        query = db.query(
+                Trip.route_id, 
+                Trip.trip_id, 
+                Trip.direction_id, 
+                Trip.shape_id, 
+                StopTime.stop_id, 
+                StopTime.stop_sequence
+            )\
+            .join(StopTime, Trip.trip_id == StopTime.trip_id)\
+            .order_by(
+                Trip.route_id, 
+                Trip.direction_id, 
+                # Podríamos agrupar por un trip representativo si hay muchos, pero por ahora tomamos todos
+                # Trip.trip_id, 
+                StopTime.stop_sequence.asc() # Orden ascendente por secuencia
+            )
             
-        trip_to_stop_ids = defaultdict(set)
-        for trip_id, stop_id in stop_times_tuples:
-            if trip_id in trip_ids_in_routes:
-                trip_to_stop_ids[trip_id].add(stop_id)
-        print(f"   - Relaciones construidas. ({time.time() - relations_start:.2f}s)")
+        results = query.all()
+        print(f"     -> {len(results)} registros de stop_times con info de trip cargados. ({(time.time() - trips_stoptimes_start):.2f}s)")
 
-        # 4. Ensamblar respuesta
-        print("   - Ensamblando respuesta...")
+        # 3. Procesar resultados para agrupar paradas por ruta y dirección
+        print("   - Agrupando paradas por ruta y dirección...")
+        processing_start = time.time()
+        route_stops_by_direction = defaultdict(lambda: defaultdict(list))
+        # También guardamos los shapes por ruta/dirección para asociarlos
+        route_shapes_by_direction = defaultdict(lambda: defaultdict(set)) 
+        
+        # Usamos un set para evitar duplicados de paradas *dentro* de una misma secuencia/dirección/ruta
+        # Mantenemos el orden gracias a la consulta ordenada
+        processed_stops = defaultdict(lambda: defaultdict(set)) 
+
+        for route_id, trip_id, direction_id, shape_id, stop_id, stop_sequence in results:
+            # Asegura que direction_id sea 0 o 1, default a 0 si es None o inválido
+            dir_key = direction_id if direction_id in [0, 1] else 0 
+            
+            # Añade shape_id al set de la dirección correspondiente
+            if shape_id:
+                route_shapes_by_direction[route_id][dir_key].add(shape_id)
+                
+            # Añade parada si no está ya en el set para esta secuencia
+            stop_tuple = (stop_sequence, stop_id) # Usamos tupla para el set
+            if stop_tuple not in processed_stops[route_id][dir_key]:
+                 stop_info = stops_map.get(stop_id)
+                 if stop_info:
+                     # Guardamos la info completa de la parada junto con su secuencia
+                     route_stops_by_direction[route_id][dir_key].append({
+                         **stop_info, 
+                         "stop_sequence": stop_sequence 
+                     })
+                     processed_stops[route_id][dir_key].add(stop_tuple)
+        
+        print(f"     -> Agrupación completada. ({(time.time() - processing_start):.2f}s)")
+
+        # 4. Ensamblar la respuesta final
+        print("   - Ensamblando respuesta final...")
         assembly_start = time.time()
         response_data = []
         for route in routes:
-            route_shape_ids = set()
-            route_stop_ids = set()
-            for trip in route_to_trips.get(route.route_id, []):
-                if trip.shape_id: route_shape_ids.add(trip.shape_id)
-                route_stop_ids.update(trip_to_stop_ids.get(trip.trip_id, set()))
+            stops_dir_0 = route_stops_by_direction[route.route_id].get(0, [])
+            stops_dir_1 = route_stops_by_direction[route.route_id].get(1, [])
             
-            route_shapes_coords = [shapes_map[shape_id] for shape_id in route_shape_ids if shape_id in shapes_map]
-            route_stops_data = [stops_map[stop_id] for stop_id in route_stop_ids if stop_id in stops_map]
+            shapes_dir_0_ids = route_shapes_by_direction[route.route_id].get(0, set())
+            shapes_dir_1_ids = route_shapes_by_direction[route.route_id].get(1, set())
+
+            # Obtiene las coordenadas de los shapes para cada dirección
+            shapes_dir_0 = [shapes_map[s_id] for s_id in shapes_dir_0_ids if s_id in shapes_map]
+            shapes_dir_1 = [shapes_map[s_id] for s_id in shapes_dir_1_ids if s_id in shapes_map]
             
             response_data.append({
-                "route_id": route.route_id, "route_short_name": route.route_short_name,
-                "route_long_name": route.route_long_name, "route_color": route.route_color,
-                "shapes": route_shapes_coords, "stops": route_stops_data })
+                "route_id": route.route_id,
+                "route_short_name": route.route_short_name,
+                "route_long_name": route.route_long_name,
+                "route_color": route.route_color,
+                # Devolvemos shapes y stops separados por dirección
+                "direction_0": {
+                    "stops": stops_dir_0,
+                    "shapes": shapes_dir_0
+                },
+                "direction_1": {
+                    "stops": stops_dir_1,
+                    "shapes": shapes_dir_1
+                }
+            })
             
         total_time = time.time() - start_time
         print(f"   - Ensamblaje completado. ({time.time() - assembly_start:.2f}s)")
-        print(f"✅ Consulta optimizada V2 completada en {total_time:.2f} segundos.")
+        print(f"✅ Consulta V3 completada en {total_time:.2f} segundos.")
         return response_data
         
     except Exception as e:
         import traceback
-        print(f"❌ Error durante la consulta optimizada V2: {e}")
+        print(f"❌ Error durante la consulta V3: {e}")
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error al procesar datos del mapa: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error al procesar datos del mapa V3: {str(e)}")
