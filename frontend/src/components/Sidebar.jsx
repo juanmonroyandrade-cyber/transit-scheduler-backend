@@ -1,8 +1,9 @@
 // frontend/src/components/Sidebar.jsx
 
-export default function Sidebar({ setActiveView, activeView, gtfsTables }) {
+// Asegúrate que gtfsTables sea recibido como prop o definido aquí
+export default function Sidebar({ setActiveView, activeView, gtfsTables = [] }) {
 
-  const getLinkClass = (view) => 
+  const getLinkClass = (view) =>
     `block px-4 py-2 text-sm rounded-md transition-colors duration-150 ${
       activeView === view
         ? "bg-blue-600 text-white font-semibold"
@@ -18,15 +19,16 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables }) {
           <h3 className="px-4 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Principal</h3>
           <a href="#" onClick={() => setActiveView("upload")} className={getLinkClass("upload")}>Cargar GTFS</a>
           <a href="#" onClick={() => setActiveView("map")} className={getLinkClass("map")}>Visualizador de Mapa</a>
-          {/* ✅ Nuevo enlace para crear ruta */}
-          <a href="#" onClick={() => setActiveView("create_route_kml")} className={getLinkClass("create_route_kml")}>
-              Crear Ruta KML
+          <a href="#" onClick={() => setActiveView("create_route_kml")} className={getLinkClass("create_route_kml")}>Crear Ruta KML</a>
+          {/* ✅ Nuevo enlace para Cargar Paradas CSV */}
+          <a href="#" onClick={() => setActiveView("upload_stops_csv")} className={getLinkClass("upload_stops_csv")}>
+              Cargar Paradas CSV
           </a>
         </div>
         {/* Editor GTFS */}
         <div className="flex-grow overflow-y-auto">
           <h3 className="px-4 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Editor GTFS</h3>
-          {[...(gtfsTables || [])].sort().map((table) => ( 
+          {[...gtfsTables].sort().map((table) => (
             <a key={table} href="#" onClick={() => setActiveView(table)} className={getLinkClass(table)}>
               {table.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
             </a>
@@ -35,7 +37,7 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables }) {
       </nav>
       {/* Footer */}
       <div className="mt-auto pt-4 border-t border-gray-200">
-          <p className="text-xs text-center text-gray-400">Versión 1.3</p> 
+          <p className="text-xs text-center text-gray-400">Versión 1.4</p> {/* Incrementa versión si quieres */}
       </div>
     </aside>
   );
