@@ -29,7 +29,8 @@ export default function CreateRouteFromKML() {
     const fetchAgencies = async () => {
         try {
             console.log("[CreateRouteKML] Fetching agencies...");
-            const url = 'http://localhost:8000/admin/agencies?page=1&per_page=1000';
+            // ✅ 1. CORRECCIÓN: Se quitan los parámetros de paginación
+            const url = 'http://localhost:8000/admin/agencies';
             console.log(`[CreateRouteKML] Fetching URL: ${url}`);
             const res = await fetch(url);
             if (!isMounted) return;
@@ -38,18 +39,18 @@ export default function CreateRouteFromKML() {
                  let errorDetail = `HTTP ${res.status}`;
                  try {
                      const errorJson = await res.json();
-                     if (errorJson.detail && Array.isArray(errorJson.detail)) {
-                         errorDetail = errorJson.detail.map(err => `${err.loc.join('.')}: ${err.msg}`).join('; ');
-                     } else if (errorJson.detail) { errorDetail = errorJson.detail; }
+                     errorDetail = errorJson.detail || errorDetail;
                  } catch (e) { errorDetail = `${res.status}: ${res.statusText}`; }
                  console.error("[CreateRouteKML] Fetch agencies failed:", errorDetail);
                  throw new Error(`No se pudieron cargar agencias (${errorDetail}).`);
             }
 
-            const data = await res.json();
+            // ✅ 2. CORRECCIÓN: Ahora `data` es el array directamente, no un objeto
+            const data = await res.json(); 
             console.log("[CreateRouteKML] Agencies received:", data);
 
-            const agenciesData = Array.isArray(data?.data) ? data.data : [];
+            // ✅ 3. CORRECCIÓN: Se usa `data` directamente en lugar de `data.data`
+            const agenciesData = Array.isArray(data) ? data : [];
             setAgencies(agenciesData);
 
             if (agenciesData.length > 0 && routeData.agency_id === null) {
@@ -67,7 +68,7 @@ export default function CreateRouteFromKML() {
     };
     fetchAgencies();
     return () => { isMounted = false; };
-  }, []);
+  }, []); // Dependencia vacía
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -81,12 +82,13 @@ export default function CreateRouteFromKML() {
     else setKmlFileDir1(file);
   };
 
- const handleSubmit = async (e) => {
+  const handleSubmit = async (e) => {
+    // ... (El resto de la función handleSubmit se mantiene igual que la versión anterior)
     e.preventDefault();
     setLoading(true);
     setStatus({ message: 'Procesando...', type: 'loading' });
 
-    // Validaciones (igual que antes)
+    // Validaciones
     if (!routeData.route_id || !routeData.route_short_name || !routeData.agency_id) {setStatus({ message: 'ID Ruta, Nombre Corto y Agencia requeridos.', type: 'error' }); setLoading(false); return;}
     if ((!kmlFileDir0 || !shapeIdDir0) && (!kmlFileDir1 || !shapeIdDir1)) {setStatus({ message: 'Proporciona al menos un KML con su Shape ID.', type: 'error' }); setLoading(false); return;}
     if ((kmlFileDir0 && !shapeIdDir0) || (!kmlFileDir0 && shapeIdDir0)) {setStatus({ message: 'Proporciona KML y Shape ID para Sentido 1.', type: 'error' }); setLoading(false); return;}
@@ -102,33 +104,26 @@ export default function CreateRouteFromKML() {
       console.log("[CreateRouteKML] Enviando datos al backend...");
       const res = await fetch('http://localhost:8000/routes/create-with-kml', { method: 'POST', body: formDataToSend });
       console.log("[CreateRouteKML] Respuesta recibida:", res.status, res.statusText);
-
-      // Intenta parsear JSON incluso si no es ok, para obtener el 'detail' del error
+      
       const result = await res.json();
-
       if (!res.ok) {
           console.error("[CreateRouteKML] Error del servidor:", result);
-          // Usa el 'detail' del JSON si existe, si no, usa el statusText o un mensaje genérico
-          throw new Error(result.detail || `Error ${res.status}: ${res.statusText || 'Error del servidor'}`);
+          throw new Error(result.detail || `Error ${res.status}`);
       }
-
-      // ✅ Construye el mensaje de éxito de forma segura
+      
+      // Lógica segura para mensaje de éxito (de la respuesta anterior)
       let successMessage = `Ruta '${result.route_short_name || routeData.route_short_name}' creada/actualizada!`;
-      // Verifica si shapes_added existe y es un array antes de usar join
       if (result.shapes_added && Array.isArray(result.shapes_added) && result.shapes_added.length > 0) {
         successMessage += ` Shapes procesados: ${result.shapes_added.join(', ')}.`;
       } else if (result.shapes_processed && Array.isArray(result.shapes_processed) && result.shapes_processed.length > 0) {
-        // Fallback por si el backend usa 'shapes_processed'
         successMessage += ` Shapes procesados: ${result.shapes_processed.map(s => s.shape_id).join(', ')}.`;
       } else {
          successMessage += " No se procesaron nuevos shapes.";
       }
-
       setStatus({ message: successMessage, type: 'success' });
-
+      
     } catch (err) {
       console.error("[CreateRouteKML] Error en handleSubmit:", err);
-      // Muestra el mensaje de error directamente
       setStatus({ message: `Error al crear: ${err.message}`, type: 'error' });
     } finally {
       setLoading(false);
@@ -140,7 +135,7 @@ export default function CreateRouteFromKML() {
 
   // --- Clases Tailwind ---
   const inputBaseStyle = "mt-1 block w-full px-3 py-1.5 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-gray-100 disabled:cursor-not-allowed";
-  const fileInputBaseStyle = "mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-1.5 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"; // ✅ Definida
+  const fileInputBaseStyle = "mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-1.5 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer";
   const labelBaseStyle = "block text-sm font-medium text-gray-700";
   const requiredMark = <span className="text-red-500">*</span>;
 
@@ -177,7 +172,6 @@ export default function CreateRouteFromKML() {
             <legend className="text-lg font-semibold px-2 text-gray-700">Sentido 1 (Ida)</legend>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
                  <div><label htmlFor="shape_id_0" className={labelBaseStyle}>Shape ID (Sentido 1)</label><input type="text" id="shape_id_0" value={shapeIdDir0} onChange={(e) => setShapeIdDir0(e.target.value)} placeholder="ID único trazado ida" className={inputBaseStyle}/></div>
-                 {/* ✅ Usa fileInputBaseStyle */}
                 <div><label htmlFor="kml_file_0" className={labelBaseStyle}>Archivo KML (Sentido 1)</label><input type="file" id="kml_file_0" accept=".kml,application/vnd.google-earth.kml+xml" onChange={(e) => handleFileChange(e, 0)} className={fileInputBaseStyle}/></div>
             </div>
              <p className="text-xs text-gray-500 mt-2">Proporciona un Shape ID y un KML si se usa este sentido.</p>
@@ -188,7 +182,6 @@ export default function CreateRouteFromKML() {
             <legend className="text-lg font-semibold px-2 text-gray-700">Sentido 2 (Vuelta)</legend>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
                  <div><label htmlFor="shape_id_1" className={labelBaseStyle}>Shape ID (Sentido 2)</label><input type="text" id="shape_id_1" value={shapeIdDir1} onChange={(e) => setShapeIdDir1(e.target.value)} placeholder="ID único trazado vuelta" className={inputBaseStyle}/></div>
-                 {/* ✅ Usa fileInputBaseStyle */}
                 <div><label htmlFor="kml_file_1" className={labelBaseStyle}>Archivo KML (Sentido 2)</label><input type="file" id="kml_file_1" accept=".kml,application/vnd.google-earth.kml+xml" onChange={(e) => handleFileChange(e, 1)} className={fileInputBaseStyle}/></div>
             </div>
              <p className="text-xs text-gray-500 mt-2">Proporciona un Shape ID y un KML si se usa este sentido.</p>
@@ -202,7 +195,6 @@ export default function CreateRouteFromKML() {
              </button>
         </div>
       </form>
-
     </div>
   );
 }
