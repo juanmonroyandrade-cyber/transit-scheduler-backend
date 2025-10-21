@@ -6,114 +6,105 @@ export default function CreateRouteFromKML() {
     route_short_name: '',
     route_long_name: '',
     route_type: 3, // Default: Bus
-    route_color: 'FFFFFF', // Default: White
-    route_text_color: '000000', // Default: Black
-    agency_id: null, // Se asignará del primer agency disponible
+    route_color: 'FFFFFF',
+    route_text_color: '000000',
+    agency_id: null,
   });
   const [kmlFileDir0, setKmlFileDir0] = useState(null);
   const [shapeIdDir0, setShapeIdDir0] = useState('');
   const [kmlFileDir1, setKmlFileDir1] = useState(null);
   const [shapeIdDir1, setShapeIdDir1] = useState('');
-  const [agencies, setAgencies] = useState([]); // Para seleccionar agency_id
-  
-  const [status, setStatus] = useState({ message: '', type: '' }); // success, error, loading
-  const [loading, setLoading] = useState(false);
+  const [agencies, setAgencies] = useState([]);
 
-  // Cargar agencias disponibles al montar
+  const [status, setStatus] = useState({ message: '', type: '' });
+  const [loading, setLoading] = useState(false);
+  const [loadingAgencies, setLoadingAgencies] = useState(true);
+
+  // Cargar agencias
   useEffect(() => {
+    let isMounted = true;
+    setLoadingAgencies(true);
+    setStatus({ message: '', type: '' }); // Limpia estado al montar/cambiar
+
     const fetchAgencies = async () => {
         try {
-            const res = await fetch('http://localhost:8000/admin/agencies'); // Asume que tienes este endpoint
-            if (!res.ok) throw new Error('No se pudieron cargar las agencias.');
+            console.log("Fetching agencies...");
+            // Pide página 1 con hasta 1000 agencias (ajusta si necesitas más)
+            const res = await fetch('http://localhost:8000/admin/agencies?page=1&per_page=1000');
+            if (!isMounted) return;
+
+            // Intenta obtener el detalle del error si la respuesta no es OK
+            if (!res.ok) {
+                 let errorDetail = `HTTP ${res.status}`;
+                 try {
+                     // Intenta parsear la respuesta como JSON para obtener el 'detail'
+                     const errorJson = await res.json();
+                     errorDetail = errorJson.detail || errorDetail;
+                 } catch (e) {
+                     // Si no es JSON, usa el texto de estado
+                     errorDetail = `${res.status}: ${res.statusText}`;
+                 }
+                 console.error("Fetch agencies failed:", errorDetail);
+                 throw new Error(`No se pudieron cargar las agencias (${errorDetail}).`);
+            }
+
             const data = await res.json();
-            setAgencies(data);
-            // Asigna automáticamente el ID de la primera agencia si existe
-            if (data.length > 0 && !routeData.agency_id) {
-                setRouteData(prev => ({ ...prev, agency_id: data[0].agency_id }));
+            console.log("Agencies received:", data);
+
+            // Accede a la lista dentro de data.data
+            const agenciesData = Array.isArray(data?.data) ? data.data : [];
+            setAgencies(agenciesData);
+
+            if (agenciesData.length > 0 && routeData.agency_id === null) {
+                setRouteData(prev => ({ ...prev, agency_id: agenciesData[0].agency_id }));
+            } else if (agenciesData.length === 0) {
+                 setStatus({ message: 'No se encontraron agencias. Asegúrate de haber cargado un archivo GTFS.', type: 'warning' }); // Cambiado a warning
             }
         } catch (err) {
-            console.error(err);
-             setStatus({ message: 'Error al cargar agencias: ' + err.message, type: 'error' });
+            // ✅ Muestra el mensaje de error construido en el catch
+            console.error("Error fetching agencies:", err);
+            // Asegura que err.message exista y sea un string
+            const errorMessage = (err instanceof Error ? err.message : String(err)) || 'Error desconocido.';
+            if(isMounted) setStatus({ message: `Error al cargar agencias: ${errorMessage}`, type: 'error' });
+        } finally {
+            if(isMounted) setLoadingAgencies(false);
         }
     };
     fetchAgencies();
-  }, []); // Carga una sola vez
+    return () => { isMounted = false; }; // Cleanup
+  }, []); // Dependencia vacía
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setRouteData(prev => ({ ...prev, [name]: value }));
+    const val = (name === 'agency_id' || name === 'route_type') ? parseInt(value, 10) : value;
+    setRouteData(prev => ({ ...prev, [name]: val }));
   };
 
   const handleFileChange = (e, direction) => {
     const file = e.target.files[0];
-    if (direction === 0) {
-      setKmlFileDir0(file);
-    } else {
-      setKmlFileDir1(file);
-    }
+    if (direction === 0) setKmlFileDir0(file);
+    else setKmlFileDir1(file);
   };
 
   const handleSubmit = async (e) => {
+    // ... (resto de la función handleSubmit sin cambios)
     e.preventDefault();
     setLoading(true);
     setStatus({ message: 'Procesando...', type: 'loading' });
-
-    // Validaciones básicas
-    if (!routeData.route_id || !routeData.route_short_name || !routeData.agency_id) {
-        setStatus({ message: 'ID de Ruta, Nombre Corto y Agencia son requeridos.', type: 'error' });
-        setLoading(false);
-        return;
-    }
-     if ((!kmlFileDir0 || !shapeIdDir0) && (!kmlFileDir1 || !shapeIdDir1)) {
-        setStatus({ message: 'Debes proporcionar al menos un archivo KML con su Shape ID.', type: 'error' });
-        setLoading(false);
-        return;
-    }
-    if ((kmlFileDir0 && !shapeIdDir0) || (!kmlFileDir0 && shapeIdDir0)) {
-         setStatus({ message: 'Debes proporcionar KML y Shape ID para Sentido 1.', type: 'error' });
-         setLoading(false);
-         return;
-    }
-     if ((kmlFileDir1 && !shapeIdDir1) || (!kmlFileDir1 && shapeIdDir1)) {
-         setStatus({ message: 'Debes proporcionar KML y Shape ID para Sentido 2.', type: 'error' });
-         setLoading(false);
-         return;
-    }
-
-
-    const formData = new FormData();
-
-    // Añadir datos de la ruta como JSON stringificado
-    formData.append('route_data', JSON.stringify(routeData));
-    
-    // Añadir archivos KML y shape IDs si existen
-    if (kmlFileDir0 && shapeIdDir0) {
-        formData.append('kml_file_0', kmlFileDir0);
-        formData.append('shape_id_0', shapeIdDir0);
-    }
-     if (kmlFileDir1 && shapeIdDir1) {
-        formData.append('kml_file_1', kmlFileDir1);
-        formData.append('shape_id_1', shapeIdDir1);
-    }
-
+    if (!routeData.route_id || !routeData.route_short_name || !routeData.agency_id) {setStatus({ message: 'ID Ruta, Nombre Corto y Agencia requeridos.', type: 'error' }); setLoading(false); return;}
+    if ((!kmlFileDir0 || !shapeIdDir0) && (!kmlFileDir1 || !shapeIdDir1)) {setStatus({ message: 'Proporciona al menos un KML con su Shape ID.', type: 'error' }); setLoading(false); return;}
+    if ((kmlFileDir0 && !shapeIdDir0) || (!kmlFileDir0 && shapeIdDir0)) {setStatus({ message: 'Proporciona KML y Shape ID para Sentido 1.', type: 'error' }); setLoading(false); return;}
+    if ((kmlFileDir1 && !shapeIdDir1) || (!kmlFileDir1 && shapeIdDir1)) {setStatus({ message: 'Proporciona KML y Shape ID para Sentido 2.', type: 'error' }); setLoading(false); return;}
+     if (shapeIdDir0 && shapeIdDir1 && shapeIdDir0.trim() === shapeIdDir1.trim()) { setStatus({ message: 'Los Shape IDs deben ser diferentes.', type: 'error'}); setLoading(false); return; }
+    const formDataToSend = new FormData();
+    formDataToSend.append('route_data', JSON.stringify(routeData));
+    if (kmlFileDir0 && shapeIdDir0) { formDataToSend.append('kml_file_0', kmlFileDir0); formDataToSend.append('shape_id_0', shapeIdDir0.trim()); }
+    if (kmlFileDir1 && shapeIdDir1) { formDataToSend.append('kml_file_1', kmlFileDir1); formDataToSend.append('shape_id_1', shapeIdDir1.trim()); }
     try {
-      // Usaremos un nuevo endpoint, por ejemplo /routes/create-with-kml
-      const res = await fetch('http://localhost:8000/routes/create-with-kml', {
-        method: 'POST',
-        body: formData, // No necesita 'Content-Type' header, el navegador lo pone con FormData
-      });
-
+      const res = await fetch('http://localhost:8000/routes/create-with-kml', { method: 'POST', body: formDataToSend });
       const result = await res.json();
-
-      if (!res.ok) {
-        throw new Error(result.detail || `Error ${res.status} del servidor.`);
-      }
-
-      setStatus({ message: `¡Ruta '${result.route_short_name}' creada exitosamente! Shapes agregados: ${result.shapes_added.join(', ')}`, type: 'success' });
-      // Limpiar formulario (opcional)
-       // setRouteData({ route_id: '', route_short_name: '', ... });
-       // setKmlFileDir0(null); setShapeIdDir0(''); ... etc.
-
+      if (!res.ok) throw new Error(result.detail || `Error ${res.status}`);
+      setStatus({ message: `Ruta '${result.route_short_name}' creada! Shapes: ${result.shapes_added.join(', ')}`, type: 'success' });
     } catch (err) {
       console.error("Error al crear ruta:", err);
       setStatus({ message: `Error: ${err.message}`, type: 'error' });
@@ -121,140 +112,73 @@ export default function CreateRouteFromKML() {
       setLoading(false);
     }
   };
-  
-  // Opciones para route_type GTFS
-  const routeTypeOptions = [
-    { value: 0, label: 'Tranvía, Tren ligero' },
-    { value: 1, label: 'Subterráneo, Metro' },
-    { value: 2, label: 'Tren' },
-    { value: 3, label: 'Autobús' },
-    { value: 4, label: 'Ferry' },
-    { value: 5, label: 'Teleférico' },
-    { value: 6, label: 'Góndola' },
-    { value: 7, label: 'Funicular' },
-    // Añadir más si es necesario
-  ];
 
+  const routeTypeOptions = [ { value: 0, label: 'Tranvía' }, { value: 1, label: 'Metro' }, { value: 2, label: 'Tren' }, { value: 3, label: 'Autobús' }, { value: 4, label: 'Ferry' }, /* ... */ ];
+
+  // --- Clases Tailwind ---
+  const inputBaseStyle = "mt-1 block w-full px-3 py-1.5 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm";
+  const fileInputBaseStyle = "mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-1.5 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer";
+  const labelBaseStyle = "block text-sm font-medium text-gray-700";
+  const requiredMark = <span className="text-red-500">*</span>;
+
+  // --- Renderizado del Formulario ---
   return (
     <div className="p-6 bg-gray-100 h-full overflow-y-auto">
       <h1 className="text-2xl font-bold mb-6 text-gray-800">Crear Ruta desde KML</h1>
 
-      {/* Mensaje de Estado */}
-      {status.message && (
-        <div className={`p-3 mb-4 rounded-md text-sm ${
-            status.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' : 
-            status.type === 'error' ? 'bg-red-100 text-red-800 border border-red-200' : 
-            'bg-blue-100 text-blue-800 border border-blue-200'
-        }`}>
-          {status.message}
-        </div>
-      )}
+      {/* Mensaje Estado */}
+      {status.message && ( <div className={`p-3 mb-4 rounded-md text-sm border ${ status.type === 'success' ? 'bg-green-100 text-green-800 border-green-200' : status.type === 'error' ? 'bg-red-100 text-red-800 border-red-200' : status.type === 'warning' ? 'bg-yellow-100 text-yellow-800 border-yellow-200' : 'bg-blue-100 text-blue-800 border-blue-200' }`}> {status.message} </div> )}
 
       <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-md space-y-6">
-        
-        {/* Sección Datos de la Ruta */}
+
+        {/* Datos Ruta */}
         <fieldset className="border p-4 rounded-md">
             <legend className="text-lg font-semibold px-2 text-gray-700">Datos de la Ruta</legend>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
                 <div>
-                    <label htmlFor="agency_id" className="block text-sm font-medium text-gray-700">Agencia <span className="text-red-500">*</span></label>
-                    <select id="agency_id" name="agency_id" value={routeData.agency_id || ''} onChange={handleInputChange} required 
-                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm disabled:bg-gray-100"
-                            disabled={agencies.length === 0}>
-                        <option value="" disabled>Selecciona una agencia...</option>
-                        {agencies.map(agency => (
-                            <option key={agency.agency_id} value={agency.agency_id}>{agency.agency_name} (ID: {agency.agency_id})</option>
-                        ))}
+                    <label htmlFor="agency_id" className={labelBaseStyle}>Agencia {requiredMark}</label>
+                    <select id="agency_id" name="agency_id" value={routeData.agency_id ?? ''} onChange={handleInputChange} required className={`${inputBaseStyle} ${loadingAgencies || agencies.length === 0 ? 'bg-gray-100 cursor-not-allowed' : ''}`} disabled={loadingAgencies || agencies.length === 0}>
+                        <option value="" disabled>{loadingAgencies ? 'Cargando...' : 'Selecciona...'}</option>
+                        {agencies.map(agency => ( <option key={agency.agency_id} value={agency.agency_id}>{agency.agency_name || `ID ${agency.agency_id}`}</option> ))}
                     </select>
-                     {agencies.length === 0 && <p className="text-xs text-red-500 mt-1">No hay agencias disponibles. Importa un GTFS primero.</p>}
+                     {/* Muestra este mensaje solo si terminó de cargar y no hay agencias */}
+                     {!loadingAgencies && agencies.length === 0 && !status.message && <p className="text-xs text-orange-600 mt-1">No hay agencias disponibles. Carga un GTFS primero.</p>}
                 </div>
-                <div>
-                    <label htmlFor="route_id" className="block text-sm font-medium text-gray-700">ID de Ruta <span className="text-red-500">*</span></label>
-                    <input type="text" id="route_id" name="route_id" value={routeData.route_id} onChange={handleInputChange} required 
-                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
-                </div>
-                 <div>
-                    <label htmlFor="route_short_name" className="block text-sm font-medium text-gray-700">Nombre Corto <span className="text-red-500">*</span></label>
-                    <input type="text" id="route_short_name" name="route_short_name" value={routeData.route_short_name} onChange={handleInputChange} required 
-                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
-                </div>
-                <div>
-                    <label htmlFor="route_long_name" className="block text-sm font-medium text-gray-700">Nombre Largo</label>
-                    <input type="text" id="route_long_name" name="route_long_name" value={routeData.route_long_name} onChange={handleInputChange} 
-                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
-                </div>
-                 <div>
-                    <label htmlFor="route_type" className="block text-sm font-medium text-gray-700">Tipo de Ruta</label>
-                     <select id="route_type" name="route_type" value={routeData.route_type} onChange={handleInputChange}
-                            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                        {routeTypeOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                    </select>
-                </div>
-                 <div className="flex space-x-4">
-                    <div className="flex-1">
-                        <label htmlFor="route_color" className="block text-sm font-medium text-gray-700">Color (Hex)</label>
-                        <div className="flex items-center">
-                            <span className="inline-block h-8 w-8 rounded border border-gray-300 mr-2" style={{ backgroundColor: `#${routeData.route_color}` }}></span>
-                            <input type="text" id="route_color" name="route_color" value={routeData.route_color} onChange={handleInputChange} maxLength="6" placeholder="Ej: FF0000"
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
-                        </div>
-                    </div>
-                     <div className="flex-1">
-                        <label htmlFor="route_text_color" className="block text-sm font-medium text-gray-700">Color Texto (Hex)</label>
-                         <div className="flex items-center">
-                             <span className="inline-block h-8 w-8 rounded border border-gray-300 mr-2 flex items-center justify-center font-bold" style={{ backgroundColor: `#${routeData.route_text_color}`, color: `#${routeData.route_color}`}}>Aa</span>
-                             <input type="text" id="route_text_color" name="route_text_color" value={routeData.route_text_color} onChange={handleInputChange} maxLength="6" placeholder="Ej: 000000"
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
-                         </div>
-                    </div>
-                </div>
+                 <div><label htmlFor="route_id" className={labelBaseStyle}>ID Ruta {requiredMark}</label><input type="text" id="route_id" name="route_id" value={routeData.route_id} onChange={handleInputChange} required className={inputBaseStyle}/></div>
+                 <div><label htmlFor="route_short_name" className={labelBaseStyle}>Nombre Corto {requiredMark}</label><input type="text" id="route_short_name" name="route_short_name" value={routeData.route_short_name} onChange={handleInputChange} required className={inputBaseStyle}/></div>
+                 <div><label htmlFor="route_long_name" className={labelBaseStyle}>Nombre Largo</label><input type="text" id="route_long_name" name="route_long_name" value={routeData.route_long_name} onChange={handleInputChange} className={inputBaseStyle}/></div>
+                 <div><label htmlFor="route_type" className={labelBaseStyle}>Tipo Ruta</label><select id="route_type" name="route_type" value={routeData.route_type} onChange={handleInputChange} className={inputBaseStyle}>{routeTypeOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select></div>
+                 <div className="flex space-x-4"><div className="flex-1"><label htmlFor="route_color" className={labelBaseStyle}>Color</label><div className="flex items-center mt-1"><span className="inline-block h-8 w-8 rounded border border-gray-300 mr-2" style={{ backgroundColor: `#${routeData.route_color}` }}></span><input type="text" id="route_color" name="route_color" value={routeData.route_color} onChange={handleInputChange} maxLength="6" placeholder="FFFFFF" className={inputBaseStyle}/></div></div><div className="flex-1"><label htmlFor="route_text_color" className={labelBaseStyle}>Color Texto</label><div className="flex items-center mt-1"><span className="inline-block h-8 w-8 rounded border border-gray-300 mr-2 flex items-center justify-center font-bold" style={{ backgroundColor: `#${routeData.route_text_color}`, color: `#${routeData.route_color}`}}>Aa</span><input type="text" id="route_text_color" name="route_text_color" value={routeData.route_text_color} onChange={handleInputChange} maxLength="6" placeholder="000000" className={inputBaseStyle}/></div></div></div>
             </div>
         </fieldset>
 
-        {/* Sección Sentido 1 (Ida) */}
+        {/* Sentido 1 */}
         <fieldset className="border p-4 rounded-md">
             <legend className="text-lg font-semibold px-2 text-gray-700">Sentido 1 (Ida)</legend>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-                 <div>
-                    <label htmlFor="shape_id_0" className="block text-sm font-medium text-gray-700">Shape ID (Sentido 1) <span className="text-red-500">*</span></label>
-                    <input type="text" id="shape_id_0" value={shapeIdDir0} onChange={(e) => setShapeIdDir0(e.target.value)} 
-                           placeholder="Identificador único para este trazado"
-                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
-                </div>
-                <div>
-                    <label htmlFor="kml_file_0" className="block text-sm font-medium text-gray-700">Archivo KML (Sentido 1) <span className="text-red-500">*</span></label>
-                    <input type="file" id="kml_file_0" accept=".kml" onChange={(e) => handleFileChange(e, 0)} 
-                           className="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
-                </div>
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                 <div><label htmlFor="shape_id_0" className={labelBaseStyle}>Shape ID (Sentido 1)</label><input type="text" id="shape_id_0" value={shapeIdDir0} onChange={(e) => setShapeIdDir0(e.target.value)} placeholder="ID único trazado ida" className={inputBaseStyle}/></div>
+                <div><label htmlFor="kml_file_0" className={labelBaseStyle}>Archivo KML (Sentido 1)</label><input type="file" id="kml_file_0" accept=".kml,application/vnd.google-earth.kml+xml" onChange={(e) => handleFileChange(e, 0)} className={fileInputBaseStyle}/></div>
             </div>
+             <p className="text-xs text-gray-500 mt-2">Proporciona un Shape ID y un KML si se usa este sentido.</p>
         </fieldset>
 
-        {/* Sección Sentido 2 (Vuelta) */}
-         <fieldset className="border p-4 rounded-md">
+        {/* Sentido 2 */}
+        <fieldset className="border p-4 rounded-md">
             <legend className="text-lg font-semibold px-2 text-gray-700">Sentido 2 (Vuelta)</legend>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-                 <div>
-                    <label htmlFor="shape_id_1" className="block text-sm font-medium text-gray-700">Shape ID (Sentido 2) <span className="text-red-500">*</span></label>
-                    <input type="text" id="shape_id_1" value={shapeIdDir1} onChange={(e) => setShapeIdDir1(e.target.value)} 
-                           placeholder="Identificador único para este trazado"
-                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"/>
-                </div>
-                <div>
-                    <label htmlFor="kml_file_1" className="block text-sm font-medium text-gray-700">Archivo KML (Sentido 2) <span className="text-red-500">*</span></label>
-                    <input type="file" id="kml_file_1" accept=".kml" onChange={(e) => handleFileChange(e, 1)} 
-                           className="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
-                </div>
+                 <div><label htmlFor="shape_id_1" className={labelBaseStyle}>Shape ID (Sentido 2)</label><input type="text" id="shape_id_1" value={shapeIdDir1} onChange={(e) => setShapeIdDir1(e.target.value)} placeholder="ID único trazado vuelta" className={inputBaseStyle}/></div>
+                <div><label htmlFor="kml_file_1" className={labelBaseStyle}>Archivo KML (Sentido 2)</label><input type="file" id="kml_file_1" accept=".kml,application/vnd.google-earth.kml+xml" onChange={(e) => handleFileChange(e, 1)} className={fileInputBaseStyle}/></div>
             </div>
+             <p className="text-xs text-gray-500 mt-2">Proporciona un Shape ID y un KML si se usa este sentido.</p>
         </fieldset>
-        
-        {/* Botón de Envío */}
+
+        {/* Botón Envío */}
         <div className="flex justify-end pt-4">
-             <button type="submit" disabled={loading || agencies.length === 0}
-                    className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50">
-                 {loading ? 'Creando Ruta...' : 'Crear Ruta y Shapes'}
+             <button type="submit" disabled={loading || loadingAgencies || agencies.length === 0}
+                    className="px-6 py-2 bg-indigo-600 text-white font-semibold rounded-md shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed">
+                 {loading ? 'Creando...' : 'Crear Ruta y Shapes'}
              </button>
         </div>
-
       </form>
     </div>
   );
