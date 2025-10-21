@@ -81,12 +81,12 @@ export default function CreateRouteFromKML() {
     else setKmlFileDir1(file);
   };
 
-  const handleSubmit = async (e) => {
+ const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setStatus({ message: 'Procesando...', type: 'loading' });
 
-    // Validaciones
+    // Validaciones (igual que antes)
     if (!routeData.route_id || !routeData.route_short_name || !routeData.agency_id) {setStatus({ message: 'ID Ruta, Nombre Corto y Agencia requeridos.', type: 'error' }); setLoading(false); return;}
     if ((!kmlFileDir0 || !shapeIdDir0) && (!kmlFileDir1 || !shapeIdDir1)) {setStatus({ message: 'Proporciona al menos un KML con su Shape ID.', type: 'error' }); setLoading(false); return;}
     if ((kmlFileDir0 && !shapeIdDir0) || (!kmlFileDir0 && shapeIdDir0)) {setStatus({ message: 'Proporciona KML y Shape ID para Sentido 1.', type: 'error' }); setLoading(false); return;}
@@ -102,13 +102,30 @@ export default function CreateRouteFromKML() {
       console.log("[CreateRouteKML] Enviando datos al backend...");
       const res = await fetch('http://localhost:8000/routes/create-with-kml', { method: 'POST', body: formDataToSend });
       console.log("[CreateRouteKML] Respuesta recibida:", res.status, res.statusText);
-      const result = await res.json(); // Intenta parsear JSON siempre
+
+      // Intenta parsear JSON incluso si no es ok, para obtener el 'detail' del error
+      const result = await res.json();
+
       if (!res.ok) {
           console.error("[CreateRouteKML] Error del servidor:", result);
-          throw new Error(result.detail || `Error ${res.status}`);
+          // Usa el 'detail' del JSON si existe, si no, usa el statusText o un mensaje genérico
+          throw new Error(result.detail || `Error ${res.status}: ${res.statusText || 'Error del servidor'}`);
       }
-      setStatus({ message: `Ruta '${result.route_short_name}' creada! Shapes: ${result.shapes_added.join(', ')}`, type: 'success' });
-      // Resetear formulario aquí si lo deseas
+
+      // ✅ Construye el mensaje de éxito de forma segura
+      let successMessage = `Ruta '${result.route_short_name || routeData.route_short_name}' creada/actualizada!`;
+      // Verifica si shapes_added existe y es un array antes de usar join
+      if (result.shapes_added && Array.isArray(result.shapes_added) && result.shapes_added.length > 0) {
+        successMessage += ` Shapes procesados: ${result.shapes_added.join(', ')}.`;
+      } else if (result.shapes_processed && Array.isArray(result.shapes_processed) && result.shapes_processed.length > 0) {
+        // Fallback por si el backend usa 'shapes_processed'
+        successMessage += ` Shapes procesados: ${result.shapes_processed.map(s => s.shape_id).join(', ')}.`;
+      } else {
+         successMessage += " No se procesaron nuevos shapes.";
+      }
+
+      setStatus({ message: successMessage, type: 'success' });
+
     } catch (err) {
       console.error("[CreateRouteKML] Error en handleSubmit:", err);
       // Muestra el mensaje de error directamente
