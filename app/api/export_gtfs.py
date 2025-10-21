@@ -39,46 +39,94 @@ NON_GTFS_ID_COLS = ['id', 'feed_info_id']
 # --- FIN DE LA MODIFICACIÓN ---
 
 
+import numpy as np
+import pandas as pd
+
 def format_dataframe_for_gtfs(df: pd.DataFrame, model) -> pd.DataFrame:
-    """Aplica formato específico de GTFS a un DataFrame antes de guardarlo en CSV."""
-    
-    # Maneja columnas de fechas (de objeto date/datetime a YYYYMMDD string)
+    """Aplica formato GTFS a un DataFrame antes de guardarlo en CSV, con ajuste dinámico de horas 24/25."""
+
+    # --- Fechas ---
     date_columns = ['start_date', 'end_date', 'feed_start_date', 'feed_end_date', 'date']
     for col in date_columns:
         if col in df.columns:
-            # Convierte a datetime (si no lo es ya) y luego a string YYYYMMDD
-            # Maneja NaT (Not a Time) que puede aparecer si hay nulos
             df[col] = pd.to_datetime(df[col], errors='coerce').dt.strftime('%Y%m%d').replace('NaT', '')
 
-    # Maneja columnas de tiempo (de objeto time a HH:MM:SS string)
-    time_columns = ['arrival_time', 'departure_time']
-    for col in time_columns:
-        if col in df.columns:
-             # Convierte a string con formato HH:MM:SS
-             df[col] = df[col].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) and x else None)
-
-    # Maneja columnas booleanas (de True/False/None a 1/0)
+    # --- Booleanos ---
     bool_columns = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
     for col in bool_columns:
         if col in df.columns:
-            # Convierte True a 1, y cualquier otra cosa (False, None, 0) a 0
             df[col] = df[col].apply(lambda x: 1 if x is True or x == 1 else 0).astype(int)
 
-    # ✅ --- INICIO DE LA MODIFICACIÓN ---
-    # Obtiene todas las columnas definidas en el modelo
+    # --- bikes_allowed (sin decimales) ---
+    for col in ['bike_allowed', 'bikes_allowed']:
+        if col in df.columns:
+            df[col] = df[col].apply(
+                lambda x: str(int(float(x))) if pd.notna(x) and str(x).strip() != '' else ''
+            )
+
+    # --- Columnas GTFS ---
     all_model_columns = [c.name for c in model.__table__.columns]
-    
-    # Define las columnas GTFS (todas las del modelo MENOS las IDs personalizadas)
     gtfs_columns = [col for col in all_model_columns if col not in NON_GTFS_ID_COLS]
-    
-    # Filtra el DataFrame para que solo tenga las columnas GTFS que realmente existen en el df
     final_columns = [col for col in gtfs_columns if col in df.columns]
-    
-    # Reordena el DataFrame para que coincida con el orden de las columnas GTFS
     df = df[final_columns]
-    # --- FIN DE LA MODIFICACIÓN ---
+
+    # --- Función para ajustar tiempos dinámicamente por trip ---
+    def adjust_times_grouped(times, trip_ids=None):
+        """Ajusta horas dinámicamente: suma 24h si cruza medianoche por trip_id."""
+        adjusted = []
+        last_seconds = None
+        last_trip = None
+
+        for idx, t in enumerate(times):
+            current_trip = trip_ids[idx] if trip_ids is not None else None
+
+            # Reinicia contador al cambiar de trip
+            if current_trip != last_trip:
+                last_seconds = None
+                last_trip = current_trip
+
+            if pd.isna(t) or t == '':
+                adjusted.append('')
+                continue
+
+            # Convierte a h,m,s
+            if hasattr(t, 'hour'):
+                h, m, s = t.hour, t.minute, t.second
+            elif isinstance(t, (pd.Timestamp, np.datetime64)):
+                temp = pd.to_datetime(t).time()
+                h, m, s = temp.hour, temp.minute, temp.second
+            else:
+                parts = str(t).split(':')
+                h, m, s = map(int, (parts + ['0','0'])[:3])
+
+            total_seconds = h*3600 + m*60 + s
+
+            # Suma 24h si retrocede respecto al anterior
+            if last_seconds is not None and total_seconds < last_seconds:
+                total_seconds += 24*3600
+
+            last_seconds = total_seconds
+
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            adjusted.append(f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}")
+
+        return adjusted
+
+    # --- Tiempos dinámicos ---
+    time_columns = ['arrival_time', 'departure_time']
+    for col in time_columns:
+        if col in df.columns:
+            trip_ids = df['trip_id'].tolist() if 'trip_id' in df.columns else None
+            # Ordena por trip y stop_sequence si existen
+            if 'trip_id' in df.columns and 'stop_sequence' in df.columns:
+                df = df.sort_values(['trip_id', 'stop_sequence'])
+            df[col] = adjust_times_grouped(df[col].tolist(), trip_ids=trip_ids)
 
     return df
+
+
 
 @router.get("/export-zip")
 async def export_gtfs_zip(db: Session = Depends(get_db)):
