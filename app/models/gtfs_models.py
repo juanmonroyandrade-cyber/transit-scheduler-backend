@@ -34,6 +34,15 @@ class Calendar(Base):
     end_date = Column(Date, nullable=True)
 
     trips = relationship("Trip", back_populates="calendar")
+class CalendarDate(Base):
+    __tablename__ = "calendar_dates"
+    # Usar un 'id' autoincremental como PK es más fácil para editar
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    service_id = Column(String(50), ForeignKey("calendar.service_id"), index=True, nullable=False)
+    date = Column(Date, nullable=False)
+    # 1 = Servicio añadido, 2 = Servicio removido
+    exception_type = Column(Integer, nullable=False, default=1)
+
 
 # -------------------------------
 # FeedInfo

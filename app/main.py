@@ -15,6 +15,8 @@ from app.models import gtfs_models
 # Importa todos tus routers
 from app.api import gtfs, kml, csv, admin_web, admin
 from app.api import routes_api # Asegúrate que este esté importado
+from app.api import export_gtfs # Asegúrate que este esté importado
+
 
 app = FastAPI(title=settings.API_TITLE, version=settings.API_VERSION)
 
@@ -34,10 +36,10 @@ print(f"🔧 Configurando CORS para permitir orígenes: {allowed_origins_setting
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins_setting, # Usa la variable definida arriba
+    allow_origins=getattr(settings, "ALLOWED_ORIGINS", origins),
     allow_credentials=True,
-    allow_methods=["*"], # Permite todos los métodos (GET, POST, PUT, DELETE, etc.)
-    allow_headers=["*"], # Permite todas las cabeceras
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # --- Incluir routers ---
@@ -48,9 +50,12 @@ app.include_router(csv.router)
 app.include_router(admin_web.router)
 app.include_router(admin.router)
 app.include_router(routes_api.router) # El router para /routes/create-with-kml
+app.include_router(export_gtfs.router)
+
 
 @app.on_event("startup")
 def create_tables():
+    # ... (sin cambios)
     try:
         logging.info("Verificando/creando tablas...")
         gtfs_models.Base.metadata.create_all(bind=engine)

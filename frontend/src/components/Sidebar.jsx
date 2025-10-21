@@ -1,6 +1,5 @@
 // frontend/src/components/Sidebar.jsx
 
-// Asegúrate que gtfsTables sea recibido como prop o definido aquí
 export default function Sidebar({ setActiveView, activeView, gtfsTables = [] }) {
 
   const getLinkClass = (view) =>
@@ -20,9 +19,10 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables = [] }) 
           <a href="#" onClick={() => setActiveView("upload")} className={getLinkClass("upload")}>Cargar GTFS</a>
           <a href="#" onClick={() => setActiveView("map")} className={getLinkClass("map")}>Visualizador de Mapa</a>
           <a href="#" onClick={() => setActiveView("create_route_kml")} className={getLinkClass("create_route_kml")}>Crear Ruta KML</a>
-          {/* ✅ Nuevo enlace para Cargar Paradas CSV */}
-          <a href="#" onClick={() => setActiveView("upload_stops_csv")} className={getLinkClass("upload_stops_csv")}>
-              Cargar Paradas CSV
+          <a href="#" onClick={() => setActiveView("upload_stops_csv")} className={getLinkClass("upload_stops_csv")}>Cargar Paradas CSV</a>
+          {/* ✅ Nuevo enlace para Exportar */}
+          <a href="#" onClick={() => setActiveView("export_gtfs")} className={getLinkClass("export_gtfs")}>
+              Exportar GTFS
           </a>
         </div>
         {/* Editor GTFS */}
@@ -37,7 +37,7 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables = [] }) 
       </nav>
       {/* Footer */}
       <div className="mt-auto pt-4 border-t border-gray-200">
-          <p className="text-xs text-center text-gray-400">Versión 1.4</p> {/* Incrementa versión si quieres */}
+          <p className="text-xs text-center text-gray-400">Versión 1.5</p>
       </div>
     </aside>
   );
