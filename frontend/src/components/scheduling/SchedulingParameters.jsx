@@ -1,15 +1,111 @@
 import { useState, useEffect } from 'react';
 
+/**
+ * Componente DurationInput
+ * - value: string en formato "hh:mm" (pero acepta entradas parciales como "36", "0:36", "1:5")
+ * - onChange: (normalizedValue: string) => void
+ * - className: clases css opcionales
+ *
+ * Normaliza en onBlur y también normaliza en cada cambio llamando onChange con valor sin formatear
+ * (para mantener al usuario en control mientras escribe) y luego en onBlur o cuando la cadena es válida
+ * devuelve el formato "hh:mm".
+ */
+function DurationInput({ value, onChange, className = '' }) {
+  const [local, setLocal] = useState(value ?? '');
+
+  useEffect(() => {
+    // Si el valor externo cambia (p. ej. carga desde storage), actualizar local
+    setLocal(value ?? '');
+  }, [value]);
+
+  const normalize = (raw) => {
+    if (raw == null) return '00:00';
+    const s = String(raw).trim();
+
+    if (s === '') return '';
+
+    // Si viene en formato hh:mm o h:m
+    const hhmm = s.match(/^(\d{1,2}):(\d{1,2})$/);
+    if (hhmm) {
+      let hh = parseInt(hhmm[1], 10);
+      let mm = parseInt(hhmm[2], 10);
+      if (isNaN(hh)) hh = 0;
+      if (isNaN(mm)) mm = 0;
+      if (mm < 0) mm = 0;
+      if (mm > 59) mm = 59;
+      // Limitar horas a 2 dígitos por estética (puede ser >23 para duraciones)
+      hh = Math.max(0, hh);
+      const HH = String(hh).padStart(2, '0');
+      const MM = String(mm).padStart(2, '0');
+      return `${HH}:${MM}`;
+    }
+
+    // Si sólo ingresó minutos "36" -> interpretar como 00:36
+    const onlyMin = s.match(/^(\d{1,4})$/); // hasta 9999 minutos
+    if (onlyMin) {
+      let totalMin = parseInt(onlyMin[1], 10);
+      if (isNaN(totalMin)) totalMin = 0;
+      const hh = Math.floor(totalMin / 60);
+      const mm = totalMin % 60;
+      const HH = String(hh).padStart(2, '0');
+      const MM = String(mm).padStart(2, '0');
+      return `${HH}:${MM}`;
+    }
+
+    // Si no coincide, devolver vacío (no válido)
+    return '';
+  };
+
+  const handleChange = (e) => {
+    const v = e.target.value;
+    // Permitimos números, ":" y espacios mientras escribe
+    if (/^[0-9:\s]*$/.test(v)) {
+      setLocal(v);
+      // Opcional: podemos emitir cambios parciales, pero preferimos emitir sólo normalizados cuando sea válido
+      const normalized = normalize(v);
+      if (normalized) onChange(normalized);
+      else onChange(v); // emitir lo que está escribiendo para mantener el estado sincronizado
+    }
+  };
+
+  const handleBlur = () => {
+    const normalized = normalize(local);
+    if (normalized) {
+      setLocal(normalized);
+      onChange(normalized);
+    } else {
+      // si no es válido, no sobreescribimos con algo extraño; opcional: limpiar
+      // setLocal('00:00'); onChange('00:00');
+      // mejor dejarlo vacío y el guardado podrá validar si es necesario
+      onChange(local);
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      pattern="\d{1,3}:?\d{1,2}"
+      value={local}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      placeholder="hh:mm"
+      className={className}
+    />
+  );
+}
+
 export default function SchedulingParameters() {
   // ===== TABLA 1: Parámetros Generales =====
   const [tabla1, setTabla1] = useState({
     numeroRuta: '',
     nombreRuta: '',
     periodicidad: '',
-    horaInicioCentro: '03:54',
+    horaInicioCentro: '03:54', // time-of-day (mantener input type=time)
     horaInicioBarrio: '04:30',
     horaFinCentro: '22:58',
     horaFinBarrio: '22:46',
+    // estos son DURACIONES -> usar DurationInput
     tiempoRecorridoCB: '00:36',
     tiempoRecorridoBC: '00:36',
     dwellCentro: 0,
@@ -25,14 +121,14 @@ export default function SchedulingParameters() {
     { hora: 23, buses: 5 }
   ]);
 
-  // ===== TABLA 3: Tiempos de Ciclo Variables =====
+  // ===== TABLA 3: Tiempos de Ciclo Variables ===== (DURACIONES)
   const [tabla3, setTabla3] = useState([
     { hora: 4, tCicloAB: '01:12', tCicloBA: '01:12' },
     { hora: 5, tCicloAB: '01:15', tCicloBA: '01:15' },
     { hora: 23, tCicloAB: '01:10', tCicloBA: '01:10' }
   ]);
 
-  // ===== TABLA 4: Intervalos Centro (Headways A→B) =====
+  // ===== TABLA 4: Intervalos Centro (Headways A→B) ===== (time-of-day)
   const [tabla4, setTabla4] = useState([
     { desde: '03:54', hasta: '07:00', headway: 15 },
     { desde: '07:00', hasta: '09:00', headway: 10 },
@@ -41,7 +137,7 @@ export default function SchedulingParameters() {
     { desde: '19:00', hasta: '22:58', headway: 20 }
   ]);
 
-  // ===== TABLA 5: Intervalos Barrio (Headways B→A) =====
+  // ===== TABLA 5: Intervalos Barrio (Headways B→A) ===== (time-of-day)
   const [tabla5, setTabla5] = useState([
     { desde: '04:30', hasta: '07:30', headway: 15 },
     { desde: '07:30', hasta: '09:30', headway: 10 },
@@ -50,7 +146,7 @@ export default function SchedulingParameters() {
     { desde: '19:30', hasta: '22:46', headway: 20 }
   ]);
 
-  // ===== TABLA 6: Tiempos Recorrido Variables Centro (A→B) =====
+  // ===== TABLA 6: Tiempos Recorrido Variables Centro (A→B) ===== (DURACIONES)
   const [tabla6, setTabla6] = useState([
     { desde: '03:54', hasta: '07:00', recorridoAB: '00:36' },
     { desde: '07:00', hasta: '09:00', recorridoAB: '00:40' },
@@ -59,7 +155,7 @@ export default function SchedulingParameters() {
     { desde: '19:00', hasta: '22:58', recorridoAB: '00:36' }
   ]);
 
-  // ===== TABLA 7: Tiempos Recorrido Variables Barrio (B→A) =====
+  // ===== TABLA 7: Tiempos Recorrido Variables Barrio (B→A) ===== (DURACIONES)
   const [tabla7, setTabla7] = useState([
     { desde: '04:30', hasta: '07:30', recorridoBA: '00:36' },
     { desde: '07:30', hasta: '09:30', recorridoBA: '00:42' },
@@ -98,7 +194,7 @@ export default function SchedulingParameters() {
         const res = await fetch('http://localhost:8000/admin/shapes');
         if (res.ok) {
           const data = await res.json();
-          const routeShapes = data.filter(s => 
+          const routeShapes = data.filter(s =>
             s.shape_id && s.shape_id.startsWith(`${tabla1.numeroRuta}.`)
           );
           setShapes(routeShapes);
@@ -147,8 +243,8 @@ export default function SchedulingParameters() {
     if (field === 'numeroRuta') {
       const route = routes.find(r => r.route_id === value);
       if (route) {
-        setTabla1(prev => ({ 
-          ...prev, 
+        setTabla1(prev => ({
+          ...prev,
           numeroRuta: value,
           nombreRuta: route.route_long_name || route.route_short_name || ''
         }));
@@ -198,18 +294,18 @@ export default function SchedulingParameters() {
 
       if (response.ok) {
         const result = await response.json();
-        setStatus({ 
-          message: `✅ Parámetros guardados correctamente (ID: ${result.id})`, 
-          type: 'success' 
+        setStatus({
+          message: `✅ Parámetros guardados correctamente (ID: ${result.id})`,
+          type: 'success'
         });
       } else {
         throw new Error('Error al guardar en el servidor');
       }
     } catch (err) {
       console.error('Error:', err);
-      setStatus({ 
-        message: `✅ Parámetros guardados localmente (servidor no disponible)`, 
-        type: 'success' 
+      setStatus({
+        message: `✅ Parámetros guardados localmente (servidor no disponible)`,
+        type: 'success'
       });
     } finally {
       setLoading(false);
@@ -260,8 +356,8 @@ export default function SchedulingParameters() {
         {status.message && (
           <div className={`p-4 mb-6 rounded-md ${
             status.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' :
-            status.type === 'error' ? 'bg-red-100 text-red-800 border border-red-200' :
-            'bg-blue-100 text-blue-800 border border-blue-200'
+              status.type === 'error' ? 'bg-red-100 text-red-800 border border-red-200' :
+                'bg-blue-100 text-blue-800 border border-blue-200'
           }`}>
             {status.message}
           </div>
@@ -308,11 +404,19 @@ export default function SchedulingParameters() {
             </div>
             <div>
               <label className={labelClass}>Tiempo Recorrido C→B (hh:mm)</label>
-              <input type="time" value={tabla1.tiempoRecorridoCB} onChange={(e) => handleTabla1Change('tiempoRecorridoCB', e.target.value)} className={inputClass + ' w-full'} />
+              <DurationInput
+                value={tabla1.tiempoRecorridoCB}
+                onChange={(val) => handleTabla1Change('tiempoRecorridoCB', val)}
+                className={inputClass + ' w-full'}
+              />
             </div>
             <div>
               <label className={labelClass}>Tiempo Recorrido B→C (hh:mm)</label>
-              <input type="time" value={tabla1.tiempoRecorridoBC} onChange={(e) => handleTabla1Change('tiempoRecorridoBC', e.target.value)} className={inputClass + ' w-full'} />
+              <DurationInput
+                value={tabla1.tiempoRecorridoBC}
+                onChange={(val) => handleTabla1Change('tiempoRecorridoBC', val)}
+                className={inputClass + ' w-full'}
+              />
             </div>
             <div>
               <label className={labelClass}>Dwell en Centro (minutos)</label>
@@ -392,10 +496,18 @@ export default function SchedulingParameters() {
                       <input type="number" value={row.hora} onChange={(e) => handleTableChange(3, idx, 'hora', Number(e.target.value), setTabla3)} className={inputClass} min="0" max="23" />
                     </td>
                     <td className={tdClass}>
-                      <input type="time" value={row.tCicloAB} onChange={(e) => handleTableChange(3, idx, 'tCicloAB', e.target.value, setTabla3)} className={inputClass} />
+                      <DurationInput
+                        value={row.tCicloAB}
+                        onChange={(val) => handleTableChange(3, idx, 'tCicloAB', val, setTabla3)}
+                        className={inputClass}
+                      />
                     </td>
                     <td className={tdClass}>
-                      <input type="time" value={row.tCicloBA} onChange={(e) => handleTableChange(3, idx, 'tCicloBA', e.target.value, setTabla3)} className={inputClass} />
+                      <DurationInput
+                        value={row.tCicloBA}
+                        onChange={(val) => handleTableChange(3, idx, 'tCicloBA', val, setTabla3)}
+                        className={inputClass}
+                      />
                     </td>
                     <td className={tdClass}>
                       <button onClick={() => removeRow(setTabla3, idx)} className="text-red-600 hover:text-red-800 text-sm">Eliminar</button>
@@ -511,7 +623,11 @@ export default function SchedulingParameters() {
                         <input type="time" value={row.hasta} onChange={(e) => handleTableChange(6, idx, 'hasta', e.target.value, setTabla6)} className={inputClass + ' w-full'} />
                       </td>
                       <td className={tdClass}>
-                        <input type="time" value={row.recorridoAB} onChange={(e) => handleTableChange(6, idx, 'recorridoAB', e.target.value, setTabla6)} className={inputClass + ' w-full'} />
+                        <DurationInput
+                          value={row.recorridoAB}
+                          onChange={(val) => handleTableChange(6, idx, 'recorridoAB', val, setTabla6)}
+                          className={inputClass}
+                        />
                       </td>
                       <td className={tdClass}>
                         <button onClick={() => removeRow(setTabla6, idx)} className="text-red-600 hover:text-red-800 text-sm">×</button>
@@ -548,7 +664,11 @@ export default function SchedulingParameters() {
                         <input type="time" value={row.hasta} onChange={(e) => handleTableChange(7, idx, 'hasta', e.target.value, setTabla7)} className={inputClass + ' w-full'} />
                       </td>
                       <td className={tdClass}>
-                        <input type="time" value={row.recorridoBA} onChange={(e) => handleTableChange(7, idx, 'recorridoBA', e.target.value, setTabla7)} className={inputClass + ' w-full'} />
+                        <DurationInput
+                          value={row.recorridoBA}
+                          onChange={(val) => handleTableChange(7, idx, 'recorridoBA', val, setTabla7)}
+                          className={inputClass}
+                        />
                       </td>
                       <td className={tdClass}>
                         <button onClick={() => removeRow(setTabla7, idx)} className="text-red-600 hover:text-red-800 text-sm">×</button>
