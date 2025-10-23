@@ -16,7 +16,7 @@ from app.models import gtfs_models
 from app.api import gtfs, kml, csv, admin_web, admin
 from app.api import routes_api # Asegúrate que este esté importado
 from app.api import export_gtfs # Asegúrate que este esté importado
-from app.api import gtfs, kml, csv, admin_web, admin, routes_api, export_gtfs, scheduling  # ← AÑADIR scheduling
+from app.api import gtfs, kml, csv, admin_web, admin, routes_api, export_gtfs, scheduling, timetables  # ← AÑADIR scheduling
 
 app = FastAPI(title=settings.API_TITLE, version=settings.API_VERSION)
 
@@ -52,6 +52,7 @@ app.include_router(admin.router)
 app.include_router(routes_api.router) # El router para /routes/create-with-kml
 app.include_router(export_gtfs.router)
 app.include_router(scheduling.router)  # ← AÑADIR ESTA LÍNEA
+app.include_router(timetables.router)  # ← Agregar esta línea
 
 @app.on_event("startup")
 def create_tables():

@@ -24,7 +24,7 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables = [] }) 
           <a href="#" onClick={() => setActiveView("export_gtfs")} className={getLinkClass("export_gtfs")}>Exportar GTFS</a>
         </div>
 
-        {/* ✅ Nueva Sección: Programación de Rutas */}
+        {/* Sección Programación */}
         <div>
           <h3 className="px-4 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Programación</h3>
           <a href="#" onClick={() => setActiveView("sched_params")} className={getLinkClass("sched_params")}>
@@ -41,6 +41,14 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables = [] }) 
           </a>
         </div>
 
+        {/* Sección Timetables */}
+        <div>
+          <h3 className="px-4 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Horarios</h3>
+          <a href="#" onClick={() => setActiveView("timetables")} className={getLinkClass("timetables")}>
+            Generador de Timetables
+          </a>
+        </div>
+
         {/* Editor GTFS */}
         <div className="flex-grow overflow-y-auto">
           <h3 className="px-4 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Editor GTFS</h3>
@@ -54,7 +62,7 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables = [] }) 
       </nav>
       {/* Footer */}
       <div className="mt-auto pt-4 border-t border-gray-200">
-          <p className="text-xs text-center text-gray-400">Versión 1.6</p>
+          <p className="text-xs text-center text-gray-400">Versión 1.7</p>
       </div>
     </aside>
   );
