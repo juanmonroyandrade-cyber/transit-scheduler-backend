@@ -1,388 +1,256 @@
 # app/api/timetables.py
-
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel
-from datetime import time, datetime
+from sqlalchemy import func, select, text # Asegúrate de importar text si usas SQL directo
+from app import models, database # Importa tus modelos y config de BD
+from datetime import time, timedelta
 from collections import defaultdict
+import re
+from typing import List, Dict, Any, Optional
 
-from app.database import get_db
-from app.models.gtfs_models import Route, Trip, StopTime, Stop, Calendar, Shape
+router = APIRouter(
+    prefix="/api", # Prefijo común para las rutas de este módulo
+    tags=["timetables"], # Etiqueta para la documentación de Swagger/OpenAPI
+)
 
-router = APIRouter(prefix="/timetables", tags=["Timetables"])
-
-
-# ===== SCHEMAS =====
-
-class TimetableRequest(BaseModel):
-    """Request para generar timetable"""
-    route_id: str
-    service_id: str
-    stop_ids: List[int]
-    time_range: Optional[Dict[str, str]] = {"start": "00:00", "end": "23:59"}
-
-
-class StopInfo(BaseModel):
-    """Información de una parada"""
-    stop_id: int
-    stop_name: str
-    stop_sequence: int
-    direction_id: int
-
-
-# ===== FUNCIONES AUXILIARES =====
-
-def extract_bus_number(block_id: str) -> str:
-    """
-    Extrae el número de bus del block_id.
-    Ejemplo: "580.1" → "1", "580.2" → "2"
-    """
-    if not block_id or '.' not in block_id:
-        return "N/A"
-    
+# --- Dependencia para obtener la sesión de BD ---
+def get_db():
+    db = database.SessionLocal()
     try:
-        # Tomar el número después del punto
-        bus_num = block_id.split('.')[-1]
-        return bus_num
-    except:
-        return "N/A"
+        yield db
+    finally:
+        db.close()
 
-
-def time_to_str(t: Optional[time]) -> Optional[str]:
-    """Convierte objeto time a string HH:MM"""
-    if t is None:
+# --- Funciones de Utilidad ---
+def parse_time_to_seconds(time_str: Optional[str]) -> Optional[int]:
+    """Parsea HH:MM:SS a segundos desde medianoche, maneja None y horas > 24."""
+    if time_str is None:
         return None
-    return t.strftime("%H:%M")
-
-
-def parse_time_filter(time_str: str) -> time:
-    """Parsea string HH:MM a objeto time"""
     try:
-        h, m = map(int, time_str.split(':'))
-        return time(hour=h, minute=m)
-    except:
-        return time(0, 0)
+        # Permite horas mayores a 23 y maneja potencial error si split falla
+        parts = list(map(int, time_str.split(':')))
+        if len(parts) == 3:
+            return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        elif len(parts) == 2: # Si solo viene HH:MM
+             return parts[0] * 3600 + parts[1] * 60
+        return None # Formato inesperado
+    except (ValueError, IndexError, AttributeError):
+        # AttributeError añadido por si time_str no es string
+        return None
 
-
-def get_service_days_description(calendar: Calendar) -> str:
-    """Genera descripción de días del servicio"""
-    days = []
-    if calendar.monday: days.append("Lunes")
-    if calendar.tuesday: days.append("Martes")
-    if calendar.wednesday: days.append("Miércoles")
-    if calendar.thursday: days.append("Jueves")
-    if calendar.friday: days.append("Viernes")
-    if calendar.saturday: days.append("Sábado")
-    if calendar.sunday: days.append("Domingo")
-    
-    if not days:
-        return "Sin días definidos"
-    
-    # Simplificar si es L-V o S-D
-    if len(days) == 5 and "Lunes" in days and "Viernes" in days:
-        return "Lunes a Viernes"
-    elif len(days) == 2 and "Sábado" in days and "Domingo" in days:
-        return "Sábados y Domingos"
-    elif len(days) == 7:
-        return "Diario"
-    else:
-        return ", ".join(days)
-
-
-# ===== ENDPOINTS =====
-
-@router.get("/route-stops/{route_id}")
-async def get_route_stops(route_id: str, db: Session = Depends(get_db)):
-    """
-    Obtiene todas las paradas de una ruta (ambos sentidos),
-    ordenadas por dirección y secuencia.
-    """
-    print(f"[Timetables API] ✅ Endpoint llamado: /route-stops/{route_id}")
-    
+def format_time_from_seconds(total_seconds: Optional[int]) -> Optional[str]:
+    """Convierte segundos desde medianoche a HH:MM."""
+    if total_seconds is None:
+        return None
     try:
-        # Verificar que la ruta existe
-        route = db.query(Route).filter(Route.route_id == route_id).first()
-        if not route:
-            print(f"[Timetables API] ❌ Ruta no encontrada: {route_id}")
-            raise HTTPException(status_code=404, detail=f"Ruta '{route_id}' no encontrada")
-        
-        print(f"[Timetables API] ✅ Ruta encontrada: {route.route_short_name}")
-        
-        # Obtener trips de la ruta
-        trips = db.query(Trip).filter(Trip.route_id == route_id).all()
-        
-        if not trips:
-            print(f"[Timetables API] ⚠️ No hay trips para ruta {route_id}")
-            return {"stops": []}
-        
-        print(f"[Timetables API] ✅ {len(trips)} trips encontrados")
-        
-        trip_ids = [t.trip_id for t in trips]
-        
-        # Obtener stop_times de esos trips
-        stop_times = db.query(StopTime, Stop, Trip)\
-            .join(Stop, StopTime.stop_id == Stop.stop_id)\
-            .join(Trip, StopTime.trip_id == Trip.trip_id)\
-            .filter(StopTime.trip_id.in_(trip_ids))\
-            .order_by(Trip.direction_id, StopTime.stop_sequence)\
-            .all()
-        
-        print(f"[Timetables API] ✅ {len(stop_times)} stop_times encontrados")
-        
-        # Agrupar paradas únicas (evitar duplicados)
-        stops_dict = {}
-        for st, stop, trip in stop_times:
-            key = (stop.stop_id, trip.direction_id)
-            if key not in stops_dict:
-                stops_dict[key] = {
-                    "stop_id": stop.stop_id,
-                    "stop_name": stop.stop_name,
-                    "stop_sequence": st.stop_sequence,
-                    "direction_id": trip.direction_id or 0
-                }
-        
-        stops_list = list(stops_dict.values())
-        
-        # Ordenar por dirección y secuencia
-        stops_list.sort(key=lambda x: (x['direction_id'], x['stop_sequence']))
-        
-        print(f"[Timetables API] ✅ {len(stops_list)} paradas únicas devueltas")
-        
-        return {"stops": stops_list}
-        
-    except HTTPException:
-        raise
+        # Asegurarse que es un entero
+        total_seconds = int(total_seconds)
+        # Manejar segundos negativos si fuera posible (aunque no debería en tiempos GTFS)
+        if total_seconds < 0:
+            return None # O manejar como prefieras
+        # Calcular horas y minutos, permitiendo horas > 23
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        return f"{hours:02d}:{minutes:02d}"
+    except (ValueError, TypeError):
+        return None
+
+def get_bus_number_from_block(block_id: Optional[str]) -> Optional[int]:
+    """Extrae el número de bus del block_id (asume formato XXX.Y)."""
+    if not block_id or '.' not in block_id:
+        return None
+    try:
+        # Busca un punto seguido de dígitos al final de la cadena
+        match = re.search(r'\.(\d+)$', block_id)
+        return int(match.group(1)) if match else None
+    except (ValueError, AttributeError):
+        return None
+
+# --- Endpoint ---
+@router.get("/generate_chained_timetable/", response_model=Dict[str, Any])
+async def generate_chained_timetable(
+    route_id: str = Query(..., description="ID de la ruta GTFS"),
+    service_id: str = Query(..., description="ID del servicio/calendario GTFS"),
+    selected_stop_ids: List[str] = Query(..., description="Lista ordenada de IDs de parada (Centro, ..., Barrio, ..., Centro)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Genera un horario encadenado por bus (block_id) para una ruta y servicio,
+    mostrando solo las paradas seleccionadas en el orden especificado.
+    """
+    if len(selected_stop_ids) < 2:
+        raise HTTPException(status_code=400, detail="Se requieren al menos 2 paradas seleccionadas (origen y destino).")
+
+    # 1. Validar y Obtener Nombres de Parada (Stops) en el orden solicitado
+    try:
+        stops_query = db.query(models.Stop).filter(models.Stop.stop_id.in_(selected_stop_ids)).all()
+        stops_dict = {stop.stop_id: stop.stop_name for stop in stops_query}
     except Exception as e:
-        print(f"[Timetables API] ❌ Error obteniendo paradas: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        # Captura errores generales de BD al consultar paradas
+        raise HTTPException(status_code=500, detail=f"Error al consultar paradas: {e}")
 
-
-@router.post("/generate")
-async def generate_timetable(request: TimetableRequest, db: Session = Depends(get_db)):
-    """
-    Genera un timetable consolidado mostrando ciclos completos por bus:
-    S1 → S2 → S1 agrupados en una fila por ciclo.
-    """
-    print(f"[Timetables API] Generando timetable para ruta {request.route_id}, servicio {request.service_id}")
-    
-    try:
-        # Obtener información de la ruta
-        route = db.query(Route).filter(Route.route_id == request.route_id).first()
-        if not route:
-            raise HTTPException(status_code=404, detail="Ruta no encontrada")
-        
-        # Obtener shape para calcular distancia
-        shapes = db.query(Shape).filter(Shape.shape_id.like(f"{request.route_id}%")).all()
-        route_distance = 0
-        if shapes:
-            max_dist = max([s.shape_dist_traveled or 0 for s in shapes], default=0)
-            route_distance = round(max_dist / 1000, 2)  # Convertir a km
-        
-        # Obtener información del servicio
-        calendar = db.query(Calendar).filter(Calendar.service_id == request.service_id).first()
-        if not calendar:
-            raise HTTPException(status_code=404, detail="Servicio no encontrado")
-        
-        # Obtener trips de la ruta con el servicio especificado
-        trips = db.query(Trip).filter(
-            and_(
-                Trip.route_id == request.route_id,
-                Trip.service_id == request.service_id
-            )
-        ).all()
-        
-        if not trips:
-            raise HTTPException(
-                status_code=404, 
-                detail="No se encontraron viajes para esta combinación de ruta y servicio"
-            )
-        
-        print(f"  → {len(trips)} trips encontrados")
-        
-        # Parsear rango de tiempo
-        time_start = parse_time_filter(request.time_range['start'])
-        time_end = parse_time_filter(request.time_range['end'])
-        
-        # Agrupar trips por bus (block_id) y dirección
-        trips_by_bus = defaultdict(lambda: {"dir_0": [], "dir_1": []})
-        for trip in trips:
-            bus_number = extract_bus_number(trip.block_id or "")
-            direction = trip.direction_id or 0
-            trip_data = {
-                "trip": trip,
-                "start_time": get_trip_start_time(db, trip.trip_id)
-            }
-            if direction == 0:
-                trips_by_bus[bus_number]["dir_0"].append(trip_data)
-            else:
-                trips_by_bus[bus_number]["dir_1"].append(trip_data)
-        
-        # Ordenar trips de cada dirección por hora de salida
-        for bus_number in trips_by_bus:
-            trips_by_bus[bus_number]["dir_0"].sort(key=lambda x: x["start_time"] or time(0, 0))
-            trips_by_bus[bus_number]["dir_1"].sort(key=lambda x: x["start_time"] or time(0, 0))
-        
-        # Construir ciclos completos (S1 → S2 → S1)
-        consolidated_cycles = []
-        cycle_counter = 1
-        
-        for bus_number in sorted(trips_by_bus.keys()):
-            dir_0_trips = trips_by_bus[bus_number]["dir_0"]
-            dir_1_trips = trips_by_bus[bus_number]["dir_1"]
-            
-            # Emparejar viajes dir_0 con dir_1 siguientes
-            idx_1 = 0
-            for trip_0_data in dir_0_trips:
-                trip_0 = trip_0_data["trip"]
-                
-                # Buscar el siguiente viaje en dir_1
-                trip_1 = None
-                trip_1_data = None
-                while idx_1 < len(dir_1_trips):
-                    if dir_1_trips[idx_1]["start_time"] and trip_0_data["start_time"]:
-                        if dir_1_trips[idx_1]["start_time"] >= trip_0_data["start_time"]:
-                            trip_1_data = dir_1_trips[idx_1]
-                            trip_1 = trip_1_data["trip"]
-                            idx_1 += 1
-                            break
-                    idx_1 += 1
-                
-                # Obtener horarios para dir_0
-                stop_times_dir_0 = get_stop_times_for_trip(
-                    db, trip_0.trip_id, request.stop_ids, time_start, time_end
-                )
-                
-                # Obtener horarios para dir_1 si existe
-                stop_times_dir_1 = []
-                if trip_1:
-                    stop_times_dir_1 = get_stop_times_for_trip(
-                        db, trip_1.trip_id, request.stop_ids, time_start, time_end
-                    )
-                
-                # Calcular intervalos y duraciones
-                first_stop_dir_0 = next((st for st in stop_times_dir_0 if st["arrival_time"]), None)
-                last_stop_dir_0 = next((st for st in reversed(stop_times_dir_0) if st["arrival_time"]), None)
-                first_stop_dir_1 = next((st for st in stop_times_dir_1 if st["arrival_time"]), None) if stop_times_dir_1 else None
-                last_stop_dir_1 = next((st for st in reversed(stop_times_dir_1) if st["arrival_time"]), None) if stop_times_dir_1 else None
-                
-                cycle_data = {
-                    "recorrido": cycle_counter,
-                    "bus_number": bus_number,
-                    "dir_0": {
-                        "first_stop_time": first_stop_dir_0["arrival_time"] if first_stop_dir_0 else None,
-                        "last_stop_time": last_stop_dir_0["arrival_time"] if last_stop_dir_0 else None,
-                        "stop_times": stop_times_dir_0
-                    },
-                    "dir_1": {
-                        "first_stop_time": first_stop_dir_1["arrival_time"] if first_stop_dir_1 else None,
-                        "last_stop_time": last_stop_dir_1["arrival_time"] if last_stop_dir_1 else None,
-                        "stop_times": stop_times_dir_1
-                    },
-                    "distance_km": route_distance
-                }
-                
-                consolidated_cycles.append(cycle_data)
-                cycle_counter += 1
-        
-        # Obtener información de las paradas seleccionadas con dirección
-        stops_by_direction = {"dir_0": [], "dir_1": []}
-        for stop_id in request.stop_ids:
-            stop = db.query(Stop).filter(Stop.stop_id == stop_id).first()
-            if stop:
-                # Determinar dirección de la parada
-                stop_time_sample = db.query(StopTime, Trip).join(Trip).filter(
-                    and_(
-                        StopTime.stop_id == stop_id,
-                        Trip.route_id == request.route_id
-                    )
-                ).first()
-                
-                if stop_time_sample:
-                    direction = stop_time_sample[1].direction_id or 0
-                    stop_info = {
-                        "stop_id": stop.stop_id,
-                        "stop_name": stop.stop_name
-                    }
-                    if direction == 0:
-                        stops_by_direction["dir_0"].append(stop_info)
-                    else:
-                        stops_by_direction["dir_1"].append(stop_info)
-        
-        # Preparar respuesta
-        result = {
-            "route_id": request.route_id,
-            "route_name": f"{route.route_short_name} - {route.route_long_name}",
-            "service_id": request.service_id,
-            "service_days": get_service_days_description(calendar),
-            "stops_by_direction": stops_by_direction,
-            "cycles": consolidated_cycles,
-            "total_cycles": len(consolidated_cycles),
-            "route_distance_km": route_distance
-        }
-        
-        print(f"✅ Timetable generado: {len(consolidated_cycles)} ciclos")
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ Error generando timetable: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error generando timetable: {str(e)}")
-
-
-def get_stop_times_for_trip(
-    db: Session, 
-    trip_id: str, 
-    stop_ids: List[int], 
-    time_start: time, 
-    time_end: time
-) -> List[Dict]:
-    """Obtiene los horarios de un trip para las paradas especificadas"""
-    stop_times_data = []
-    
-    for stop_id in stop_ids:
-        st = db.query(StopTime).filter(
-            and_(
-                StopTime.trip_id == trip_id,
-                StopTime.stop_id == stop_id
-            )
-        ).first()
-        
-        if st and st.arrival_time:
-            # Verificar si está en el rango de tiempo
-            if st.arrival_time >= time_start and st.arrival_time <= time_end:
-                stop_times_data.append({
-                    "stop_id": stop_id,
-                    "arrival_time": time_to_str(st.arrival_time),
-                    "departure_time": time_to_str(st.departure_time)
-                })
-            else:
-                stop_times_data.append({
-                    "stop_id": stop_id,
-                    "arrival_time": None,
-                    "departure_time": None
-                })
+    ordered_stop_names = []
+    missing_stops = []
+    for stop_id in selected_stop_ids:
+        name = stops_dict.get(stop_id)
+        if name:
+            ordered_stop_names.append(name)
         else:
-            stop_times_data.append({
-                "stop_id": stop_id,
-                "arrival_time": None,
-                "departure_time": None
-            })
-    
-    return stop_times_data
+            missing_stops.append(stop_id)
+
+    if missing_stops:
+        raise HTTPException(status_code=404, detail=f"No se encontraron las siguientes paradas en la BD: {', '.join(missing_stops)}")
+
+    # Construir encabezados finales
+    headers = ["Corridas", "Bus"] + ordered_stop_names
+
+    # 2. Obtener Viajes (Trips)
+    try:
+        trips = db.query(models.Trip)\
+            .filter(models.Trip.route_id == route_id, models.Trip.service_id == service_id)\
+            .order_by(models.Trip.block_id)\
+            .all()
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=f"Error al consultar viajes: {e}")
+
+    if not trips:
+         # Devolver estructura vacía si no hay viajes, no es un error 404
+        return {"headers": headers, "corridas": [], "stop_ids_ordered": selected_stop_ids}
+
+    trip_ids = [trip.trip_id for trip in trips]
+
+    # 3. Obtener Tiempos de Parada (StopTimes) SOLO para paradas seleccionadas y viajes filtrados
+    try:
+        stop_times = db.query(models.StopTime)\
+            .filter(models.StopTime.trip_id.in_(trip_ids), models.StopTime.stop_id.in_(selected_stop_ids))\
+            .order_by(models.StopTime.trip_id, models.StopTime.stop_sequence)\
+            .all()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al consultar tiempos de parada: {e}")
 
 
-def get_trip_start_time(db: Session, trip_id: str) -> Optional[time]:
-    """Obtiene la hora de inicio de un trip (primera parada)"""
-    first_stop = db.query(StopTime).filter(
-        StopTime.trip_id == trip_id
-    ).order_by(StopTime.stop_sequence).first()
-    
-    return first_stop.departure_time if first_stop else None
+    # 4. Agrupar StopTimes por Trip ID y calcular tiempo de inicio del trip
+    stop_times_by_trip = defaultdict(lambda: {stop_id: None for stop_id in selected_stop_ids})
+    trip_start_times = {} # trip_id -> start_time_seconds
+
+    # Para calcular el start_time, necesitamos la primera parada REAL del viaje, no solo las seleccionadas
+    try:
+        first_stop_times_query = db.query(
+                models.StopTime.trip_id,
+                func.min(models.StopTime.stop_sequence).label('min_sequence')
+            )\
+            .filter(models.StopTime.trip_id.in_(trip_ids))\
+            .group_by(models.StopTime.trip_id)\
+            .subquery()
+
+        first_stop_times = db.query(models.StopTime)\
+            .join(first_stop_times_query,
+                  (models.StopTime.trip_id == first_stop_times_query.c.trip_id) &
+                  (models.StopTime.stop_sequence == first_stop_times_query.c.min_sequence)
+            ).all()
+
+        for st in first_stop_times:
+            start_time_str = st.departure_time or st.arrival_time
+            start_seconds = parse_time_to_seconds(start_time_str)
+            if start_seconds is not None:
+                trip_start_times[st.trip_id] = start_seconds
+
+    except Exception as e:
+        # Podríamos continuar sin ordenar perfectamente o lanzar error
+         raise HTTPException(status_code=500, detail=f"Error al obtener tiempos de inicio de viaje: {e}")
+
+    # Ahora sí, agrupar los tiempos de las paradas SELECCIONADAS
+    for st in stop_times:
+        time_in_seconds = parse_time_to_seconds(st.departure_time or st.arrival_time)
+        # Solo almacenar si el tiempo es válido
+        if time_in_seconds is not None:
+            stop_times_by_trip[st.trip_id][st.stop_id] = time_in_seconds
+
+    # 5. Agrupar Trips por Block ID
+    trips_by_block = defaultdict(list)
+    for trip in trips:
+        # Solo incluir trips que tengan tiempo de inicio calculado y al menos un stop_time en las paradas seleccionadas
+        if trip.trip_id in trip_start_times and trip.trip_id in stop_times_by_trip:
+            # Asignar el tiempo de inicio calculado al objeto trip para ordenar
+            trip.start_time_seconds = trip_start_times[trip.trip_id]
+            trips_by_block[trip.block_id].append(trip)
+
+    # Ordenar viajes dentro de cada bloque por hora de inicio
+    for block_id in trips_by_block:
+        trips_by_block[block_id].sort(key=lambda t: t.start_time_seconds)
+
+    # 6. Procesar Corridas Empalmadas
+    processed_corridas = []
+    processed_trip_ids = set() # Evitar duplicados
+
+    sorted_block_ids = sorted(trips_by_block.keys(), key=lambda x: (get_bus_number_from_block(x) or float('inf'), x or ""))
+
+    for block_id in sorted_block_ids:
+        bus_number = get_bus_number_from_block(block_id)
+        block_trips = trips_by_block[block_id]
+
+        for i, trip1 in enumerate(block_trips):
+            if trip1.trip_id in processed_trip_ids:
+                continue
+
+            # Iniciar nueva corrida
+            corrida_data = {
+                "id": f"{block_id}_{trip1.trip_id}",
+                "bus": bus_number,
+                "times": {stop_id: None for stop_id in selected_stop_ids},
+                "first_time_seconds": trip1.start_time_seconds # Para ordenar
+            }
+            trip1_times_dict = stop_times_by_trip.get(trip1.trip_id, {})
+
+            # Lógica Asumiendo: direction_id=0 es IDA, direction_id=1 es VUELTA
+            # Y selected_stop_ids = [CentroIda, ..., Barrio, ..., CentroVuelta]
+            # Podría necesitar ajustes si el orden o los IDs de dirección son diferentes
+
+            if trip1.direction_id == 0: # IDA
+                # Copiar tiempos de IDA
+                for stop_id in selected_stop_ids:
+                    if trip1_times_dict.get(stop_id) is not None:
+                         corrida_data["times"][stop_id] = format_time_from_seconds(trip1_times_dict[stop_id])
+                processed_trip_ids.add(trip1.trip_id)
+
+                # Buscar siguiente trip de VUELTA (direction_id=1)
+                if i + 1 < len(block_trips):
+                    trip2 = block_trips[i+1]
+                    if trip2.direction_id == 1 and trip2.trip_id not in processed_trip_ids:
+                        trip2_times_dict = stop_times_by_trip.get(trip2.trip_id, {})
+                        # Copiar tiempos de VUELTA (solo si no existen o son paradas posteriores)
+                        # Esta lógica asume que las paradas de selected_stop_ids están ordenadas lógicamente
+                        last_stop_index_trip1 = -1
+                        for idx, stop_id in enumerate(selected_stop_ids):
+                             if corrida_data["times"][stop_id] is not None:
+                                 last_stop_index_trip1 = idx
+
+                        for idx, stop_id in enumerate(selected_stop_ids):
+                            # Añadir tiempo de trip2 si:
+                            # 1. No había tiempo de trip1 O
+                            # 2. La parada está DESPUÉS de la última parada con tiempo de trip1
+                            if trip2_times_dict.get(stop_id) is not None and \
+                               (corrida_data["times"][stop_id] is None or idx > last_stop_index_trip1):
+                                 corrida_data["times"][stop_id] = format_time_from_seconds(trip2_times_dict[stop_id])
+                        processed_trip_ids.add(trip2.trip_id)
+
+            elif trip1.direction_id == 1: # VUELTA (Corrida incompleta al inicio)
+                 # Copiar tiempos de VUELTA
+                 for stop_id in selected_stop_ids:
+                     if trip1_times_dict.get(stop_id) is not None:
+                         corrida_data["times"][stop_id] = format_time_from_seconds(trip1_times_dict[stop_id])
+                 processed_trip_ids.add(trip1.trip_id)
+
+            # Añadir la corrida solo si tiene al menos un tiempo registrado
+            if any(corrida_data["times"].values()):
+                 processed_corridas.append(corrida_data)
+
+    # Ordenar corridas por la hora del primer trip
+    processed_corridas.sort(key=lambda c: c["first_time_seconds"])
+
+    # Añadir número de corrida y limpiar
+    for idx, corrida in enumerate(processed_corridas):
+        corrida["corrida_num"] = idx + 1
+        del corrida["first_time_seconds"] # Ya no es necesario
+
+    return {"headers": headers, "corridas": processed_corridas, "stop_ids_ordered": selected_stop_ids}
