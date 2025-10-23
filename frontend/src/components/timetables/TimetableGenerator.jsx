@@ -217,7 +217,7 @@ const TimetableGenerator = () => {
     <div className="min-h-screen bg-gray-100 py-6 overflow-y-auto">
       <div className="container mx-auto px-4 max-w-[98vw]">
         <h1 className="text-3xl font-bold mb-6 text-gray-800">
-          🚌 Generador de Horarios Encadenados
+          🚌 Generador de sábanas de programación
         </h1>
 
         <div className="bg-white shadow-lg rounded-lg p-6 mb-6">
