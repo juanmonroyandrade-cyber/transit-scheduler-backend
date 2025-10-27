@@ -244,7 +244,68 @@ export default function TableViewer({ table }) {
   };
 
   const handleDelete = async (item) => {
-    if (!pkColumn || item[pkColumn] === undefined || !window.confirm("¿Seguro?")) return;
+    if (!pkColumn || item[pkColumn] === undefined) return;
+    
+    // ✅ ESPECIAL: Si es la tabla "routes", preguntar por eliminación en cascada
+    if (table === "routes") {
+      const routeId = item[pkColumn];
+      const routeName = item.route_short_name || routeId;
+      
+      // Preguntar si desea eliminar datos relacionados
+      const confirmDelete = window.confirm(
+        `¿Eliminar la ruta "${routeName}"?\n\n` +
+        `Esta acción eliminará la ruta de la base de datos.`
+      );
+      
+      if (!confirmDelete) return;
+      
+      // Preguntar por trips y stop_times
+      const deleteTrips = window.confirm(
+        `¿Deseas eliminar también los TRIPS y STOP_TIMES de esta ruta?\n\n` +
+        `Esto eliminará TODOS los viajes y horarios asociados a la ruta "${routeName}".\n\n` +
+        `Haz clic en OK para eliminar trips y stop_times, o Cancelar para mantenerlos.`
+      );
+      
+      // Preguntar por shapes
+      const deleteShapes = window.confirm(
+        `¿Deseas eliminar también los SHAPES (trazados) de esta ruta?\n\n` +
+        `Esto eliminará los trazados geográficos asociados a "${routeName}".\n\n` +
+        `Haz clic en OK para eliminar shapes, o Cancelar para mantenerlos.`
+      );
+      
+      try {
+        const res = await fetch(
+          `http://localhost:8000/bulk/delete-route-cascade/${encodeURIComponent(routeId)}?delete_trips=${deleteTrips}&delete_shapes=${deleteShapes}`,
+          { method: 'DELETE' }
+        );
+        
+        const result = await res.json();
+        
+        if (!res.ok) throw new Error(result.detail || 'Error al eliminar.');
+        
+        // Mostrar resumen
+        alert(
+          `✅ Ruta "${routeName}" eliminada exitosamente!\n\n` +
+          `Resumen:\n` +
+          `- Trips eliminados: ${result.trips_deleted}\n` +
+          `- Stop times eliminados: ${result.stop_times_deleted}\n` +
+          `- Shapes eliminados: ${result.shapes_deleted}`
+        );
+        
+        // Recargar datos
+        setPage(0);
+        setData([]);
+        fetchData(0, searchTerm, true);
+        
+      } catch (err) {
+        alert(`Error al eliminar: ${err.message}`);
+      }
+      
+      return; // Salir para no ejecutar el delete normal
+    }
+    
+    // ✅ PARA OTRAS TABLAS: Eliminación normal
+    if (!window.confirm("¿Seguro que deseas eliminar este registro?")) return;
     
     try {
       const res = await fetch(
