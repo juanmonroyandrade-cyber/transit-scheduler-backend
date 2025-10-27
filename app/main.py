@@ -5,8 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os # Añadido para os.path
 
+
 from app.config import settings
 from app.database import engine
+from app.api import bulk_operations
 # Importar modelos GTFS y scheduling
 from app.models import gtfs_models, scheduling_models # Importar ambos aquí
 
@@ -65,6 +67,7 @@ app.include_router(routes_api.router)
 app.include_router(export_gtfs.router)
 app.include_router(scheduling.router)
 app.include_router(timetables.router) # Router para los horarios encadenados
+app.include_router(bulk_operations.router)
 logger.info("All API routers included.")
 
 # --- Evento Startup para Crear Tablas ---

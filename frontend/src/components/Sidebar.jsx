@@ -22,6 +22,8 @@ export default function Sidebar({ setActiveView, activeView, gtfsTables = [] }) 
           <a href="#" onClick={() => setActiveView("create_route_kml")} className={getLinkClass("create_route_kml")}>Crear Ruta KML</a>
           <a href="#" onClick={() => setActiveView("upload_stops_csv")} className={getLinkClass("upload_stops_csv")}>Cargar Paradas CSV</a>
           <a href="#" onClick={() => setActiveView("export_gtfs")} className={getLinkClass("export_gtfs")}>Exportar GTFS</a>
+          <a href="#" onClick={() => setActiveView("trips_manager")} className={getLinkClass("trips_manager")}>
+  Gestión de Trips</a>
         </div>
 
         {/* Sección Programación */}

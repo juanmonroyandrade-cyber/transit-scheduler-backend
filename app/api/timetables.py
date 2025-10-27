@@ -45,8 +45,23 @@ def get_bus_number_from_block(block_id: Optional[str]) -> Optional[int]:
     if not block_id:
         return None
     try:
-        match = re.search(r'\.(\d+)$', str(block_id))
-        return int(match.group(1)) if match else None
+        block_str = str(block_id)
+        
+        # Buscar patrón: número después de punto (.) o guión bajo (_)
+        # Ejemplos: "block_1.5" -> 5, "block_1_5" -> 5, "R1_05" -> 5
+        
+        # Primero intenta con punto
+        match_dot = re.search(r'\.(\d+)$', block_str)
+        if match_dot:
+            return int(match_dot.group(1))
+        
+        # Si no hay punto, intenta con guión bajo
+        match_underscore = re.search(r'_(\d+)$', block_str)
+        if match_underscore:
+            return int(match_underscore.group(1))
+        
+        # Si no encuentra ninguno, devolver None
+        return None
     except:
         return None
 

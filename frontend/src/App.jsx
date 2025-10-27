@@ -6,6 +6,7 @@ import UploadGTFS from "./components/UploadGTFS";
 import CreateRouteFromKML from "./components/CreateRouteFromKML";
 import UploadStopsCSV from "./components/UploadStopsCSV";
 import ExportGTFS from "./components/ExportGTFS";
+import TripsManager from "./components/TripsManager";
 
 // Componentes de Programación
 import SchedulingParameters from "./components/scheduling/SchedulingParameters";
@@ -53,6 +54,8 @@ function App() {
     // Revisa las vistas especiales
     switch (activeView) {
       // Principal
+      case "trips_manager":
+  return <TripsManager />;
       case "map":
         return <MapView />;
       case "upload":
