@@ -112,4 +112,19 @@ function App() {
   );
 }
 
+// Agregar en App.jsx o crear un nuevo componente
+<input type="file" onChange={async (e) => {
+  const file = e.target.files[0];
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const res = await fetch('http://localhost:8000/excel/upload-base-excel', {
+    method: 'POST',
+    body: formData
+  });
+  
+  const result = await res.json();
+  console.log(result);
+}} />
+
 export default App;
