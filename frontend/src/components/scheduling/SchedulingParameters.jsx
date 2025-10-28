@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 
 /**
- * Componente DurationInput (sin cambios)
+ * Componente DurationInput - Permite entrada de duraciones en formato HH:MM o minutos
  */
 function DurationInput({ value, onChange, className = '' }) {
   const [local, setLocal] = useState(value ?? '');
@@ -78,7 +78,7 @@ function DurationInput({ value, onChange, className = '' }) {
 }
 
 export default function SchedulingParameters() {
-  // Estados para las 7 tablas (igual que antes)
+  // Estados para las 7 tablas
   const [tabla1, setTabla1] = useState({
     numeroRuta: '',
     nombreRuta: '',
@@ -139,16 +139,13 @@ export default function SchedulingParameters() {
     { desde: '19:30', hasta: '22:46', recorridoBA: '00:36' }
   ]);
 
-  // ✅ NUEVO: Estados para resultados del Excel
-  const [excelResults, setExcelResults] = useState(null);
   const [processingExcel, setProcessingExcel] = useState(false);
-
   const [routes, setRoutes] = useState([]);
   const [shapes, setShapes] = useState([]);
   const [status, setStatus] = useState({ message: '', type: '' });
   const [loading, setLoading] = useState(false);
 
-  // Cargar rutas y shapes (igual que antes)
+  // Cargar rutas
   useEffect(() => {
     const fetchRoutes = async () => {
       try {
@@ -164,6 +161,7 @@ export default function SchedulingParameters() {
     fetchRoutes();
   }, []);
 
+  // Cargar shapes cuando cambia la ruta
   useEffect(() => {
     if (!tabla1.numeroRuta) return;
     const fetchShapes = async () => {
@@ -183,6 +181,7 @@ export default function SchedulingParameters() {
     fetchShapes();
   }, [tabla1.numeroRuta]);
 
+  // Calcular distancias desde shapes
   useEffect(() => {
     if (shapes.length === 0) return;
     const shapeGroups = {};
@@ -241,11 +240,22 @@ export default function SchedulingParameters() {
     setter(prev => prev.filter((_, i) => i !== index));
   };
 
-  // ✅ NUEVO: Función para ejecutar el procesamiento de Excel
+  // ✅ FUNCIÓN AUXILIAR: Convierte número decimal de Excel a formato HH:MM
+  const excelTimeToHHMM = (decimalTime) => {
+    if (typeof decimalTime === 'string' && decimalTime.includes(':')) {
+      return decimalTime; // Ya está en formato correcto
+    }
+    
+    const totalMinutes = Math.round(decimalTime * 24 * 60);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  };
+
+  // ✅ NUEVA FUNCIÓN: Ejecutar procesamiento de Excel y actualizar tablas 4-7
   const handleExecuteExcel = async () => {
     setProcessingExcel(true);
     setStatus({ message: 'Procesando Excel...', type: 'loading' });
-    setExcelResults(null);
 
     try {
       const data = {
@@ -274,13 +284,54 @@ export default function SchedulingParameters() {
       const result = await response.json();
       
       console.log('✅ Resultados del Excel:', result);
-      
-      setExcelResults(result.results);
+
+      // ✅ ACTUALIZAR TABLA 4 (Headways Centro)
+      // Formato esperado: [[desde, hasta, headway], ...]
+      if (result.results.tabla4 && result.results.tabla4.length > 0) {
+        const newTabla4 = result.results.tabla4.map(row => ({
+          desde: excelTimeToHHMM(row[0]),
+          hasta: excelTimeToHHMM(row[1]),
+          headway: parseInt(row[2]) || 0
+        }));
+        setTabla4(newTabla4);
+        console.log('✅ Tabla 4 actualizada con', newTabla4.length, 'filas');
+      }
+
+      // ✅ ACTUALIZAR TABLA 5 (Headways Barrio)
+      if (result.results.tabla5 && result.results.tabla5.length > 0) {
+        const newTabla5 = result.results.tabla5.map(row => ({
+          desde: excelTimeToHHMM(row[0]),
+          hasta: excelTimeToHHMM(row[1]),
+          headway: parseInt(row[2]) || 0
+        }));
+        setTabla5(newTabla5);
+        console.log('✅ Tabla 5 actualizada con', newTabla5.length, 'filas');
+      }
+
+      // ✅ ACTUALIZAR TABLA 6 (Recorridos Centro)
+      if (result.results.tabla6 && result.results.tabla6.length > 0) {
+        const newTabla6 = result.results.tabla6.map(row => ({
+          desde: excelTimeToHHMM(row[0]),
+          hasta: excelTimeToHHMM(row[1]),
+          recorridoAB: excelTimeToHHMM(row[2])
+        }));
+        setTabla6(newTabla6);
+        console.log('✅ Tabla 6 actualizada con', newTabla6.length, 'filas');
+      }
+
+      // ✅ ACTUALIZAR TABLA 7 (Recorridos Barrio)
+      if (result.results.tabla7 && result.results.tabla7.length > 0) {
+        const newTabla7 = result.results.tabla7.map(row => ({
+          desde: excelTimeToHHMM(row[0]),
+          hasta: excelTimeToHHMM(row[1]),
+          recorridoBA: excelTimeToHHMM(row[2])
+        }));
+        setTabla7(newTabla7);
+        console.log('✅ Tabla 7 actualizada con', newTabla7.length, 'filas');
+      }
+
       setStatus({
-        message: `✅ Excel procesado correctamente! Se obtuvieron ${
-          result.results.tabla4.length + result.results.tabla5.length +
-          result.results.tabla6.length + result.results.tabla7.length
-        } filas de resultados`,
+        message: `✅ Excel procesado y tablas actualizadas correctamente! (T4: ${result.results.tabla4.length}, T5: ${result.results.tabla5.length}, T6: ${result.results.tabla6.length}, T7: ${result.results.tabla7.length} filas)`,
         type: 'success'
       });
 
@@ -295,7 +346,7 @@ export default function SchedulingParameters() {
     }
   };
 
-  // Guardar parámetros (igual que antes)
+  // Guardar parámetros
   const handleSave = async () => {
     setLoading(true);
     setStatus({ message: 'Guardando parámetros...', type: 'loading' });
@@ -369,10 +420,10 @@ export default function SchedulingParameters() {
   return (
     <div className="p-6 bg-gray-100 h-full overflow-y-auto">
       <div className="max-w-7xl mx-auto">
+        {/* Header con botones */}
         <div className="flex justify-between items-center mb-6">
           <h1 className="text-3xl font-bold text-gray-800">Parámetros de Programación</h1>
           <div className="flex gap-3">
-            {/* ✅ NUEVO: Botón para ejecutar el Excel */}
             <button
               onClick={handleExecuteExcel}
               disabled={processingExcel}
@@ -400,131 +451,551 @@ export default function SchedulingParameters() {
           </div>
         </div>
 
+        {/* Mensajes de estado */}
         {status.message && (
-          <div className={`p-4 mb-6 rounded-md ${
-            status.type === 'success' ? 'bg-green-100 text-green-800 border border-green-200' :
-              status.type === 'error' ? 'bg-red-100 text-red-800 border border-red-200' :
-                'bg-blue-100 text-blue-800 border border-blue-200'
+          <div className={`p-4 mb-6 rounded-md border ${
+            status.type === 'success' ? 'bg-green-100 text-green-800 border-green-200' :
+              status.type === 'error' ? 'bg-red-100 text-red-800 border-red-200' :
+                'bg-blue-100 text-blue-800 border-blue-200 animate-pulse'
           }`}>
             {status.message}
           </div>
         )}
 
-        {/* ✅ NUEVO: Mostrar resultados del Excel */}
-        {excelResults && (
-          <div className={sectionClass}>
-            <h2 className="text-xl font-semibold mb-4 text-green-700 border-b pb-2">
-              ✅ Resultados del Excel
-            </h2>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Tabla 4 */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-700 mb-2">Tabla 4</h3>
-                <div className="overflow-auto max-h-60 border rounded">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-100 sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2 text-left">Columna 1</th>
-                        <th className="px-3 py-2 text-left">Columna 2</th>
-                        <th className="px-3 py-2 text-left">Columna 3</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {excelResults.tabla4.map((row, idx) => (
-                        <tr key={idx} className="border-t">
-                          <td className="px-3 py-2">{row[0]}</td>
-                          <td className="px-3 py-2">{row[1]}</td>
-                          <td className="px-3 py-2">{row[2]}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+        {/* TABLA 1: Parámetros Generales */}
+        <div className={sectionClass}>
+          <h2 className="text-xl font-semibold mb-4 text-gray-700 border-b pb-2">
+            Tabla 1: Parámetros Generales
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div>
+              <label className={labelClass}>Número de Ruta</label>
+              <select
+                value={tabla1.numeroRuta}
+                onChange={(e) => handleTabla1Change('numeroRuta', e.target.value)}
+                className={inputClass + " w-full"}
+              >
+                <option value="">Seleccionar...</option>
+                {routes.map(route => (
+                  <option key={route.route_id} value={route.route_id}>
+                    {route.route_short_name} - {route.route_long_name}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-              {/* Tabla 5 */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-700 mb-2">Tabla 5</h3>
-                <div className="overflow-auto max-h-60 border rounded">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-100 sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2 text-left">Columna 1</th>
-                        <th className="px-3 py-2 text-left">Columna 2</th>
-                        <th className="px-3 py-2 text-left">Columna 3</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {excelResults.tabla5.map((row, idx) => (
-                        <tr key={idx} className="border-t">
-                          <td className="px-3 py-2">{row[0]}</td>
-                          <td className="px-3 py-2">{row[1]}</td>
-                          <td className="px-3 py-2">{row[2]}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+            <div>
+              <label className={labelClass}>Nombre de Ruta</label>
+              <input
+                type="text"
+                value={tabla1.nombreRuta}
+                onChange={(e) => handleTabla1Change('nombreRuta', e.target.value)}
+                className={inputClass + " w-full"}
+              />
+            </div>
 
-              {/* Tabla 6 */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-700 mb-2">Tabla 6</h3>
-                <div className="overflow-auto max-h-60 border rounded">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-100 sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2 text-left">Columna 1</th>
-                        <th className="px-3 py-2 text-left">Columna 2</th>
-                        <th className="px-3 py-2 text-left">Columna 3</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {excelResults.tabla6.map((row, idx) => (
-                        <tr key={idx} className="border-t">
-                          <td className="px-3 py-2">{row[0]}</td>
-                          <td className="px-3 py-2">{row[1]}</td>
-                          <td className="px-3 py-2">{row[2]}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+            <div>
+              <label className={labelClass}>Periodicidad</label>
+              <input
+                type="text"
+                value={tabla1.periodicidad}
+                onChange={(e) => handleTabla1Change('periodicidad', e.target.value)}
+                className={inputClass + " w-full"}
+                placeholder="Ej: Diario, Lun-Vie"
+              />
+            </div>
 
-              {/* Tabla 7 */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-700 mb-2">Tabla 7</h3>
-                <div className="overflow-auto max-h-60 border rounded">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-gray-100 sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2 text-left">Columna 1</th>
-                        <th className="px-3 py-2 text-left">Columna 2</th>
-                        <th className="px-3 py-2 text-left">Columna 3</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {excelResults.tabla7.map((row, idx) => (
-                        <tr key={idx} className="border-t">
-                          <td className="px-3 py-2">{row[0]}</td>
-                          <td className="px-3 py-2">{row[1]}</td>
-                          <td className="px-3 py-2">{row[2]}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+            <div>
+              <label className={labelClass}>Hora Inicio Centro</label>
+              <input
+                type="time"
+                value={tabla1.horaInicioCentro}
+                onChange={(e) => handleTabla1Change('horaInicioCentro', e.target.value)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Hora Inicio Barrio</label>
+              <input
+                type="time"
+                value={tabla1.horaInicioBarrio}
+                onChange={(e) => handleTabla1Change('horaInicioBarrio', e.target.value)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Hora Fin Centro</label>
+              <input
+                type="time"
+                value={tabla1.horaFinCentro}
+                onChange={(e) => handleTabla1Change('horaFinCentro', e.target.value)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Hora Fin Barrio</label>
+              <input
+                type="time"
+                value={tabla1.horaFinBarrio}
+                onChange={(e) => handleTabla1Change('horaFinBarrio', e.target.value)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Tiempo Recorrido C→B</label>
+              <DurationInput
+                value={tabla1.tiempoRecorridoCB}
+                onChange={(v) => handleTabla1Change('tiempoRecorridoCB', v)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Tiempo Recorrido B→C</label>
+              <DurationInput
+                value={tabla1.tiempoRecorridoBC}
+                onChange={(v) => handleTabla1Change('tiempoRecorridoBC', v)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Dwell Centro (seg)</label>
+              <input
+                type="number"
+                value={tabla1.dwellCentro}
+                onChange={(e) => handleTabla1Change('dwellCentro', parseInt(e.target.value) || 0)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Dwell Barrio (seg)</label>
+              <input
+                type="number"
+                value={tabla1.dwellBarrio}
+                onChange={(e) => handleTabla1Change('dwellBarrio', parseInt(e.target.value) || 0)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Distancia C→B (km)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={tabla1.distanciaCB}
+                onChange={(e) => handleTabla1Change('distanciaCB', parseFloat(e.target.value) || 0)}
+                className={inputClass + " w-full"}
+              />
+            </div>
+
+            <div>
+              <label className={labelClass}>Distancia B→C (km)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={tabla1.distanciaBC}
+                onChange={(e) => handleTabla1Change('distanciaBC', parseFloat(e.target.value) || 0)}
+                className={inputClass + " w-full"}
+              />
             </div>
           </div>
-        )}
+        </div>
 
-        {/* RESTO DE LAS TABLAS (1-7) - IGUAL QUE ANTES */}
-        {/* Por brevedad, no repito todo el código de las tablas */}
-        {/* Copia el resto del código de las 7 tablas desde tu archivo original */}
+        {/* TABLA 2: Buses Variables por Hora */}
+        <div className={sectionClass}>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-700">
+              Tabla 2: Buses Variables por Hora
+            </h2>
+            <button
+              onClick={() => addRow(setTabla2, { hora: 0, buses: 0 })}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm"
+            >
+              + Añadir Fila
+            </button>
+          </div>
 
+          <div className="overflow-x-auto">
+            <table className={tableClass}>
+              <thead>
+                <tr>
+                  <th className={thClass}>Hora</th>
+                  <th className={thClass}>Buses</th>
+                  <th className={thClass}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {tabla2.map((row, idx) => (
+                  <tr key={idx}>
+                    <td className={tdClass}>
+                      <input
+                        type="number"
+                        min="0"
+                        max="23"
+                        value={row.hora}
+                        onChange={(e) => handleTableChange(2, idx, 'hora', parseInt(e.target.value) || 0, setTabla2)}
+                        className={inputClass + " w-20"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <input
+                        type="number"
+                        min="0"
+                        value={row.buses}
+                        onChange={(e) => handleTableChange(2, idx, 'buses', parseInt(e.target.value) || 0, setTabla2)}
+                        className={inputClass + " w-20"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <button
+                        onClick={() => removeRow(setTabla2, idx)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        🗑️
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* TABLA 3: Tiempos de Ciclo Variables */}
+        <div className={sectionClass}>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-700">
+              Tabla 3: Tiempos de Ciclo Variables
+            </h2>
+            <button
+              onClick={() => addRow(setTabla3, { hora: 0, tCicloAB: '00:00', tCicloBA: '00:00' })}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm"
+            >
+              + Añadir Fila
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className={tableClass}>
+              <thead>
+                <tr>
+                  <th className={thClass}>Hora</th>
+                  <th className={thClass}>T Ciclo A→B</th>
+                  <th className={thClass}>T Ciclo B→A</th>
+                  <th className={thClass}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {tabla3.map((row, idx) => (
+                  <tr key={idx}>
+                    <td className={tdClass}>
+                      <input
+                        type="number"
+                        min="0"
+                        max="23"
+                        value={row.hora}
+                        onChange={(e) => handleTableChange(3, idx, 'hora', parseInt(e.target.value) || 0, setTabla3)}
+                        className={inputClass + " w-20"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <DurationInput
+                        value={row.tCicloAB}
+                        onChange={(v) => handleTableChange(3, idx, 'tCicloAB', v, setTabla3)}
+                        className={inputClass + " w-24"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <DurationInput
+                        value={row.tCicloBA}
+                        onChange={(v) => handleTableChange(3, idx, 'tCicloBA', v, setTabla3)}
+                        className={inputClass + " w-24"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <button
+                        onClick={() => removeRow(setTabla3, idx)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        🗑️
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* TABLA 4: Headways Centro (SE ACTUALIZARÁ CON EXCEL) */}
+        <div className={sectionClass}>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-700">
+              Tabla 4: Headways Centro Calculados ✨
+            </h2>
+            <button
+              onClick={() => addRow(setTabla4, { desde: '00:00', hasta: '00:00', headway: 0 })}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm"
+            >
+              + Añadir Fila
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className={tableClass}>
+              <thead>
+                <tr>
+                  <th className={thClass}>Desde</th>
+                  <th className={thClass}>Hasta</th>
+                  <th className={thClass}>Headway (min)</th>
+                  <th className={thClass}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {tabla4.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className={tdClass}>
+                      <input
+                        type="time"
+                        value={row.desde}
+                        onChange={(e) => handleTableChange(4, idx, 'desde', e.target.value, setTabla4)}
+                        className={inputClass + " w-32"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <input
+                        type="time"
+                        value={row.hasta}
+                        onChange={(e) => handleTableChange(4, idx, 'hasta', e.target.value, setTabla4)}
+                        className={inputClass + " w-32"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <input
+                        type="number"
+                        min="0"
+                        value={row.headway}
+                        onChange={(e) => handleTableChange(4, idx, 'headway', parseInt(e.target.value) || 0, setTabla4)}
+                        className={inputClass + " w-24"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <button
+                        onClick={() => removeRow(setTabla4, idx)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        🗑️
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* TABLA 5: Headways Barrio (SE ACTUALIZARÁ CON EXCEL) */}
+        <div className={sectionClass}>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-700">
+              Tabla 5: Headways Barrio Calculados ✨
+            </h2>
+            <button
+              onClick={() => addRow(setTabla5, { desde: '00:00', hasta: '00:00', headway: 0 })}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm"
+            >
+              + Añadir Fila
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className={tableClass}>
+              <thead>
+                <tr>
+                  <th className={thClass}>Desde</th>
+                  <th className={thClass}>Hasta</th>
+                  <th className={thClass}>Headway (min)</th>
+                  <th className={thClass}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {tabla5.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className={tdClass}>
+                      <input
+                        type="time"
+                        value={row.desde}
+                        onChange={(e) => handleTableChange(5, idx, 'desde', e.target.value, setTabla5)}
+                        className={inputClass + " w-32"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <input
+                        type="time"
+                        value={row.hasta}
+                        onChange={(e) => handleTableChange(5, idx, 'hasta', e.target.value, setTabla5)}
+                        className={inputClass + " w-32"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <input
+                        type="number"
+                        min="0"
+                        value={row.headway}
+                        onChange={(e) => handleTableChange(5, idx, 'headway', parseInt(e.target.value) || 0, setTabla5)}
+                        className={inputClass + " w-24"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <button
+                        onClick={() => removeRow(setTabla5, idx)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        🗑️
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* TABLA 6: Recorridos Centro (SE ACTUALIZARÁ CON EXCEL) */}
+        <div className={sectionClass}>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-700">
+              Tabla 6: Recorridos Centro Calculados ✨
+            </h2>
+            <button
+              onClick={() => addRow(setTabla6, { desde: '00:00', hasta: '00:00', recorridoAB: '00:00' })}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm"
+            >
+              + Añadir Fila
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className={tableClass}>
+              <thead>
+                <tr>
+                  <th className={thClass}>Desde</th>
+                  <th className={thClass}>Hasta</th>
+                  <th className={thClass}>Recorrido</th>
+                  <th className={thClass}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {tabla6.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className={tdClass}>
+                      <input
+                        type="time"
+                        value={row.desde}
+                        onChange={(e) => handleTableChange(6, idx, 'desde', e.target.value, setTabla6)}
+                        className={inputClass + " w-32"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <input
+                        type="time"
+                        value={row.hasta}
+                        onChange={(e) => handleTableChange(6, idx, 'hasta', e.target.value, setTabla6)}
+                        className={inputClass + " w-32"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <DurationInput
+                        value={row.recorridoAB}
+                        onChange={(v) => handleTableChange(6, idx, 'recorridoAB', v, setTabla6)}
+                        className={inputClass + " w-24"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <button
+                        onClick={() => removeRow(setTabla6, idx)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        🗑️
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* TABLA 7: Recorridos Barrio (SE ACTUALIZARÁ CON EXCEL) */}
+        <div className={sectionClass}>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-700">
+              Tabla 7: Recorridos Barrio Calculados ✨
+            </h2>
+            <button
+              onClick={() => addRow(setTabla7, { desde: '00:00', hasta: '00:00', recorridoBA: '00:00' })}
+              className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 text-sm"
+            >
+              + Añadir Fila
+            </button>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className={tableClass}>
+              <thead>
+                <tr>
+                  <th className={thClass}>Desde</th>
+                  <th className={thClass}>Hasta</th>
+                  <th className={thClass}>Recorrido</th>
+                  <th className={thClass}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {tabla7.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-gray-50">
+                    <td className={tdClass}>
+                      <input
+                        type="time"
+                        value={row.desde}
+                        onChange={(e) => handleTableChange(7, idx, 'desde', e.target.value, setTabla7)}
+                        className={inputClass + " w-32"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <input
+                        type="time"
+                        value={row.hasta}
+                        onChange={(e) => handleTableChange(7, idx, 'hasta', e.target.value, setTabla7)}
+                        className={inputClass + " w-32"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <DurationInput
+                        value={row.recorridoBA}
+                        onChange={(v) => handleTableChange(7, idx, 'recorridoBA', v, setTabla7)}
+                        className={inputClass + " w-24"}
+                      />
+                    </td>
+                    <td className={tdClass}>
+                      <button
+                        onClick={() => removeRow(setTabla7, idx)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        🗑️
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   );
