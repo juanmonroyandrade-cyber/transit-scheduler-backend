@@ -48,47 +48,92 @@ function App() {
 
     // Revisa si es una tabla GTFS
     if (availableTables.includes(activeView)) {
-      return <TableViewer key={activeView} table={activeView} />;
+      // TableViewer puede ocupar la altura disponible; aseguramos que su contenedor pueda scrollear
+      return (
+        <div className="p-6 min-h-0">
+          <TableViewer key={activeView} table={activeView} />
+        </div>
+      );
     }
 
     // Revisa las vistas especiales
     switch (activeView) {
-      // Principal
       case "trips_manager":
-  return <TripsManager />;
+        return (
+          <div className="p-6 min-h-0">
+            <TripsManager />
+          </div>
+        );
       case "map":
-        return <MapView />;
+        return (
+          <div className="p-6 min-h-0">
+            <MapView />
+          </div>
+        );
       case "upload":
         return (
-          <div className="p-8 bg-gray-100 h-full">
+          // no usar h-full aquí: usar min-h-0 para permitir que el contenedor padre controle el scroll
+          <div className="p-8 bg-gray-100 min-h-0">
             <UploadGTFS />
           </div>
         );
       case "create_route_kml":
-        return <CreateRouteFromKML />;
+        return (
+          <div className="p-6 min-h-0">
+            <CreateRouteFromKML />
+          </div>
+        );
       case "upload_stops_csv":
-        return <UploadStopsCSV />;
+        return (
+          <div className="p-6 min-h-0">
+            <UploadStopsCSV />
+          </div>
+        );
       case "export_gtfs":
-        return <ExportGTFS />;
-      
+        return (
+          <div className="p-6 min-h-0">
+            <ExportGTFS />
+          </div>
+        );
+
       // Programación
       case "sched_params":
-        return <SchedulingParameters />;
+        return (
+          <div className="p-6 min-h-0">
+            <SchedulingParameters />
+          </div>
+        );
       case "sched_sheet":
-        return <SchedulingSheet />;
+        return (
+          <div className="p-6 min-h-0">
+            <SchedulingSheet />
+          </div>
+        );
       case "sched_gantt":
-        return <GanttChart />;
+        return (
+          <div className="p-6 min-h-0">
+            <GanttChart />
+          </div>
+        );
       case "sched_line_graph":
-        return <PointToPointGraph />;
+        return (
+          <div className="p-6 min-h-0">
+            <PointToPointGraph />
+          </div>
+        );
 
       // ✅ Timetables
       case "timetables":
-        return <TimetableGenerator />;
+        return (
+          <div className="p-6 min-h-0">
+            <TimetableGenerator />
+          </div>
+        );
 
       // Vista por defecto
       default:
         return (
-          <div className="p-8 bg-gray-100 h-full flex items-center justify-center">
+          <div className="p-8 bg-gray-100 min-h-0 flex items-center justify-center">
             <div className="text-center">
               <h1 className="text-2xl font-bold mb-2">Bienvenido</h1>
               <p className="text-gray-600">Selecciona una opción del menú.</p>
@@ -99,32 +144,24 @@ function App() {
   };
 
   return (
+    // Layout principal: aside fijo + main flexible
     <div className="flex h-screen bg-gray-100">
       <Sidebar
         setActiveView={setActiveView}
         activeView={activeView}
         gtfsTables={availableTables}
       />
-      <main className="flex-1 flex flex-col overflow-hidden">
+
+      {/*
+        main: debe permitir scroll cuando el contenido excede la altura del viewport.
+        - overflow-auto permite scroll sólo si es necesario
+        - min-h-0 es crítico dentro de un contenedor flex para que el overflow funcione correctamente
+      */}
+      <main className="flex-1 flex flex-col overflow-auto min-h-0">
         {renderView()}
       </main>
     </div>
   );
 }
-
-// Agregar en App.jsx o crear un nuevo componente
-<input type="file" onChange={async (e) => {
-  const file = e.target.files[0];
-  const formData = new FormData();
-  formData.append('file', file);
-  
-  const res = await fetch('http://localhost:8000/excel/upload-base-excel', {
-    method: 'POST',
-    body: formData
-  });
-  
-  const result = await res.json();
-  console.log(result);
-}} />
 
 export default App;

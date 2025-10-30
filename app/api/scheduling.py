@@ -1,318 +1,158 @@
-# app/api/scheduling.py
+# app/api/scheduling_updated.py
+
 """
-API de Programación de Rutas - Versión Actualizada
-Integra el procesador de intervalos en Python (sin dependencia de Excel)
+API actualizada para cálculo de intervalos con validación de formato HH:MM
+Compatible con Pydantic V2
 """
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import Dict, Any, Optional, List
-from datetime import datetime
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, field_validator
+from typing import List, Dict, Any
+import re
 
-from app.database import get_db
-from app.models.scheduling_models import SchedulingParameters
-from app.services.interval_processor import IntervalProcessor
+# Importar el procesador de intervalos
+from app.services.interval_processor import process_intervals
 
 router = APIRouter(prefix="/scheduling", tags=["Scheduling"])
 
 
-# ===== SCHEMAS (Pydantic Models) =====
+# ==================== VALIDADORES ====================
 
-class Tabla1(BaseModel):
-    """Parámetros generales"""
-    horaInicio: str      # Formato HH:MM
-    horaFin: str         # Formato HH:MM
-    dwellCentro: str     # Formato HH:MM (tiempo de parada en Centro)
-    dwellBarrio: str     # Formato HH:MM (tiempo de parada en Barrio)
-
-class Tabla2Item(BaseModel):
-    """Flota variable"""
-    desde: str   # Formato HH:MM
-    buses: int
-
-class Tabla3Item(BaseModel):
-    """Tiempos de recorrido variables"""
-    horaCambio: str       # Formato HH:MM
-    tCentroBarrio: str    # Formato HH:MM (Tiempo Centro→Barrio)
-    tBarrioCentro: str    # Formato HH:MM (Tiempo Barrio→Centro)
-    # El tiempo de ciclo se calcula automáticamente: tCentroBarrio + tBarrioCentro + dwells
-
-class Tabla4Item(BaseModel):
-    """Intervalos de paso en Centro (resultado)"""
-    desde: str
-    hasta: str
-    headway: int
-
-class Tabla5Item(BaseModel):
-    """Intervalos de paso en Barrio (resultado)"""
-    desde: str
-    hasta: str
-    headway: int
-
-class Tabla6Item(BaseModel):
-    """Tiempos de recorrido Centro→Barrio (resultado)"""
-    desde: str
-    hasta: str
-    recorridoCentroBarrio: str
-
-class Tabla7Item(BaseModel):
-    """Tiempos de recorrido Barrio→Centro (resultado)"""
-    desde: str
-    hasta: str
-    recorridoBarrioCentro: str
-
-class ParametersInput(BaseModel):
-    """Datos de entrada (tablas 1-3)"""
-    tabla1: Tabla1
-    tabla2: List[Tabla2Item]
-    tabla3: List[Tabla3Item]
-
-class ParametersOutput(BaseModel):
-    """Datos completos (tablas 1-7)"""
-    tabla1: Tabla1
-    tabla2: List[Tabla2Item]
-    tabla3: List[Tabla3Item]
-    tabla4: List[Tabla4Item]
-    tabla5: List[Tabla5Item]
-    tabla6: List[Tabla6Item]
-    tabla7: List[Tabla7Item]
-
-
-# ===== ENDPOINTS =====
-
-@router.post("/calculate", response_model=Dict[str, Any])
-async def calculate_intervals(data: ParametersInput, db: Session = Depends(get_db)):
+def validate_time_format(time_str: str) -> str:
     """
-    Calcula los intervalos de paso (TABLAS 4-7) a partir de los parámetros (TABLAS 1-3)
+    Valida que el formato sea HH:MM
+    """
+    if not time_str:
+        raise ValueError("El campo no puede estar vacío")
     
-    Este endpoint:
-    1. Recibe las tablas 1-3 con los parámetros de entrada
-    2. Procesa los datos usando el algoritmo de intervalos
-    3. Calcula las tablas 4-7 con los resultados
-    4. Guarda todo en la base de datos
-    5. Retorna los resultados completos
+    pattern = r'^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$'
+    if not re.match(pattern, time_str):
+        raise ValueError(f"Formato inválido: '{time_str}' (use HH:MM)")
+    
+    return time_str
+
+
+# ==================== SCHEMAS ====================
+
+class Tabla1Model(BaseModel):
+    numeroRuta: str
+    nombreRuta: str
+    periodicidad: str
+    horaInicioCentro: str
+    horaInicioBarrio: str
+    horaFinCentro: str
+    horaFinBarrio: str
+    dwellCentro: int
+    dwellBarrio: int
+    distanciaCB: float
+    distanciaBC: float
+    
+    @field_validator('horaInicioCentro', 'horaInicioBarrio', 'horaFinCentro', 'horaFinBarrio')
+    @classmethod
+    def validate_time(cls, v: str) -> str:
+        return validate_time_format(v)
+
+
+class Tabla2ItemModel(BaseModel):
+    desde: str
+    buses: int
+    
+    @field_validator('desde')
+    @classmethod
+    def validate_desde(cls, v: str) -> str:
+        return validate_time_format(v)
+
+
+class Tabla3ItemModel(BaseModel):
+    desde: str
+    tiempoCB: str
+    tiempoBC: str
+    tiempoCiclo: str
+    
+    @field_validator('desde', 'tiempoCB', 'tiempoBC')
+    @classmethod
+    def validate_times(cls, v: str) -> str:
+        return validate_time_format(v)
+
+
+class CalculateIntervalsRequest(BaseModel):
+    tabla1: Tabla1Model
+    tabla2: List[Tabla2ItemModel]
+    tabla3: List[Tabla3ItemModel]
+
+
+# ==================== ENDPOINT ====================
+
+@router.post("/calculate-intervals")
+async def calculate_intervals(request: CalculateIntervalsRequest):
     """
-    print("\n" + "="*70)
-    print("🚀 ENDPOINT /calculate llamado")
-    print("="*70)
+    Calcula intervalos de paso basados en los parámetros de entrada
+    
+    Retorna:
+        - tabla4: Intervalos Centro
+        - tabla5: Intervalos Barrio
+        - tabla6: Tiempos Centro→Barrio agrupados
+        - tabla7: Tiempos Barrio→Centro agrupados
+    """
+    print("\n🔢 Endpoint /calculate-intervals llamado")
     
     try:
-        # 1. Preparar datos de entrada
-        tabla1_dict = data.tabla1.dict()
-        tabla2_list = [item.dict() for item in data.tabla2]
-        tabla3_list = [item.dict() for item in data.tabla3]
+        # Validaciones adicionales
+        if not request.tabla2:
+            raise HTTPException(
+                status_code=400,
+                detail="Tabla 2 (Flota Variable) no puede estar vacía"
+            )
         
-        print(f"\n📥 Datos recibidos:")
-        print(f"   Tabla 1: {tabla1_dict}")
-        print(f"   Tabla 2: {len(tabla2_list)} filas")
-        print(f"   Tabla 3: {len(tabla3_list)} filas")
+        if not request.tabla3:
+            raise HTTPException(
+                status_code=400,
+                detail="Tabla 3 (Tiempos de Recorrido) no puede estar vacía"
+            )
         
-        # 2. Procesar con el algoritmo
-        processor = IntervalProcessor()
-        resultados = processor.process_parameters(tabla1_dict, tabla2_list, tabla3_list)
-        
-        print(f"\n✅ Resultados generados:")
-        print(f"   Tabla 4 (Intervalos Centro): {len(resultados['tabla4'])} períodos")
-        print(f"   Tabla 5 (Intervalos Barrio): {len(resultados['tabla5'])} períodos")
-        print(f"   Tabla 6 (Recorridos C→B): {len(resultados['tabla6'])} períodos")
-        print(f"   Tabla 7 (Recorridos B→C): {len(resultados['tabla7'])} períodos")
-        
-        # 3. Guardar en base de datos
-        # Desactivar parámetros anteriores
-        db.query(SchedulingParameters).filter(
-            SchedulingParameters.is_active == 1
-        ).update({"is_active": 0})
-        
-        # Crear nuevo registro
-        new_params = SchedulingParameters(
-            name=f"Cálculo {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-            tabla1=tabla1_dict,
-            tabla2=tabla2_list,
-            tabla3=tabla3_list,
-            tabla4=resultados["tabla4"],
-            tabla5=resultados["tabla5"],
-            tabla6=resultados["tabla6"],
-            tabla7=resultados["tabla7"],
-            is_active=1
-        )
-        
-        db.add(new_params)
-        db.commit()
-        db.refresh(new_params)
-        
-        print(f"\n💾 Guardado en BD con ID: {new_params.id}")
-        
-        # 4. Retornar resultados completos
-        response = {
-            "success": True,
-            "message": "Cálculo completado exitosamente",
-            "id": new_params.id,
-            "tabla1": tabla1_dict,
-            "tabla2": tabla2_list,
-            "tabla3": tabla3_list,
-            "tabla4": resultados["tabla4"],
-            "tabla5": resultados["tabla5"],
-            "tabla6": resultados["tabla6"],
-            "tabla7": resultados["tabla7"]
+        # Convertir a diccionario para el procesador
+        parameters = {
+            "tabla1": request.tabla1.model_dump(),
+            "tabla2": [item.model_dump() for item in request.tabla2],
+            "tabla3": [item.model_dump() for item in request.tabla3]
         }
         
-        print("\n" + "="*70)
-        print("✅ ENDPOINT /calculate completado")
-        print("="*70 + "\n")
+        # Procesar intervalos
+        result = process_intervals(parameters)
         
-        return response
+        if not result.get('success'):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error en el cálculo: {result.get('error', 'Error desconocido')}"
+            )
         
+        return {
+            "success": True,
+            "tabla4": result["tabla4"],
+            "tabla5": result["tabla5"],
+            "tabla6": result["tabla6"],
+            "tabla7": result["tabla7"],
+            "tiempo_procesamiento": result["tiempo_procesamiento"]
+        }
+        
+    except ValueError as e:
+        print(f"❌ Error de validación: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    
     except Exception as e:
-        db.rollback()
-        print(f"\n❌ ERROR en /calculate: {str(e)}")
+        print(f"❌ Error inesperado: {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500, 
-            detail=f"Error al calcular intervalos: {str(e)}"
-        )
-
-
-@router.get("/parameters/active", response_model=Optional[Dict[str, Any]])
-async def get_active_parameters(db: Session = Depends(get_db)):
-    """
-    Obtiene los parámetros activos más recientes (todas las 7 tablas)
-    """
-    print("\n📖 GET /parameters/active")
-    
-    try:
-        params = db.query(SchedulingParameters)\
-            .filter(SchedulingParameters.is_active == 1)\
-            .order_by(SchedulingParameters.created_at.desc())\
-            .first()
-        
-        if not params:
-            print("  ℹ️  No hay parámetros activos")
-            return None
-        
-        response = {
-            "id": params.id,
-            "name": params.name,
-            "tabla1": params.tabla1 or {},
-            "tabla2": params.tabla2 or [],
-            "tabla3": params.tabla3 or [],
-            "tabla4": params.tabla4 or [],
-            "tabla5": params.tabla5 or [],
-            "tabla6": params.tabla6 or [],
-            "tabla7": params.tabla7 or [],
-            "created_at": params.created_at.isoformat(),
-            "updated_at": params.updated_at.isoformat()
-        }
-        
-        print(f"  ✅ Parámetros ID {params.id} obtenidos")
-        return response
-        
-    except Exception as e:
-        print(f"  ❌ Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/parameters", response_model=List[Dict[str, Any]])
-async def list_parameters(
-    limit: int = 10,
-    offset: int = 0,
-    db: Session = Depends(get_db)
-):
-    """
-    Lista todos los conjuntos de parámetros guardados
-    """
-    print(f"\n📋 GET /parameters (limit={limit}, offset={offset})")
-    
-    try:
-        params_list = db.query(SchedulingParameters)\
-            .order_by(SchedulingParameters.created_at.desc())\
-            .limit(limit)\
-            .offset(offset)\
-            .all()
-        
-        result = []
-        for params in params_list:
-            result.append({
-                "id": params.id,
-                "name": params.name,
-                "is_active": params.is_active,
-                "created_at": params.created_at.isoformat(),
-                "updated_at": params.updated_at.isoformat()
-            })
-        
-        print(f"  ✅ {len(result)} conjuntos obtenidos")
-        return result
-        
-    except Exception as e:
-        print(f"  ❌ Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+# ==================== HEALTH CHECK ====================
 
-
-@router.get("/parameters/{param_id}", response_model=Dict[str, Any])
-async def get_parameters_by_id(param_id: int, db: Session = Depends(get_db)):
-    """
-    Obtiene un conjunto específico de parámetros por ID
-    """
-    print(f"\n📖 GET /parameters/{param_id}")
-    
-    try:
-        params = db.query(SchedulingParameters).filter(
-            SchedulingParameters.id == param_id
-        ).first()
-        
-        if not params:
-            raise HTTPException(status_code=404, detail="Parámetros no encontrados")
-        
-        response = {
-            "id": params.id,
-            "name": params.name,
-            "tabla1": params.tabla1 or {},
-            "tabla2": params.tabla2 or [],
-            "tabla3": params.tabla3 or [],
-            "tabla4": params.tabla4 or [],
-            "tabla5": params.tabla5 or [],
-            "tabla6": params.tabla6 or [],
-            "tabla7": params.tabla7 or [],
-            "created_at": params.created_at.isoformat(),
-            "updated_at": params.updated_at.isoformat(),
-            "is_active": params.is_active
-        }
-        
-        print(f"  ✅ Parámetros obtenidos")
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"  ❌ Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/parameters/{param_id}")
-async def delete_parameters(param_id: int, db: Session = Depends(get_db)):
-    """
-    Elimina un conjunto de parámetros
-    """
-    print(f"\n🗑️  DELETE /parameters/{param_id}")
-    
-    try:
-        params = db.query(SchedulingParameters).filter(
-            SchedulingParameters.id == param_id
-        ).first()
-        
-        if not params:
-            raise HTTPException(status_code=404, detail="Parámetros no encontrados")
-        
-        db.delete(params)
-        db.commit()
-        
-        print(f"  ✅ Eliminado")
-        return {"success": True, "message": "Parámetros eliminados"}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        print(f"  ❌ Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/health")
+async def health_check():
+    """Verifica que el servicio esté funcionando"""
+    return {
+        "status": "ok",
+        "service": "Interval Calculator",
+        "version": "2.0"
+    }
