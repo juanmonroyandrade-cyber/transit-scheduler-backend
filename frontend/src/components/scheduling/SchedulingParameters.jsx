@@ -1,6 +1,16 @@
-import { useState, useEffect } from 'react';
+// frontend/src/components/scheduling/SchedulingParametersV3.jsx
 
-export default function SchedulingParametersV2() {
+import React, { useState, useEffect } from 'react';
+import './SchedulingParameters.css';
+
+function SchedulingParametersV3() {
+  // ==================== ESTADOS ====================
+  
+  // Rutas disponibles
+  const [routes, setRoutes] = useState([]);
+  const [selectedRoute, setSelectedRoute] = useState(null);
+  
+  // Tabla 1: Parámetros generales
   const [tabla1, setTabla1] = useState({
     numeroRuta: '',
     nombreRuta: '',
@@ -15,457 +25,863 @@ export default function SchedulingParametersV2() {
     distanciaBC: 0
   });
 
-  const [tabla2, setTabla2] = useState([]);
-  const [tabla3, setTabla3] = useState([]);
+  // Tabla 2: Flota Variable
+  const [tabla2, setTabla2] = useState([
+    { desde: '', buses: 0 }
+  ]);
+
+  // Tabla 3: Tiempos de Recorrido
+  const [tabla3, setTabla3] = useState([
+    { desde: '', tiempoCB: '', tiempoBC: '', tiempoCiclo: '' }
+  ]);
+
+  // Tablas 4-7: Resultados (solo lectura)
   const [tabla4, setTabla4] = useState([]);
   const [tabla5, setTabla5] = useState([]);
   const [tabla6, setTabla6] = useState([]);
   const [tabla7, setTabla7] = useState([]);
 
+  // Estados de UI
   const [loading, setLoading] = useState(false);
-  const [calculating, setCalculating] = useState(false);
+  const [calculando, setCalculando] = useState(false);
   const [status, setStatus] = useState({ message: '', type: '' });
+  
+  // Estados para modales
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [showLoadModal, setShowLoadModal] = useState(false);
+  const [scenarioName, setScenarioName] = useState('');
+  const [savedScenarios, setSavedScenarios] = useState([]);
+  const [loadingScenarios, setLoadingScenarios] = useState(false);
 
+  // ==================== EFECTOS ====================
+
+  // Cargar rutas al montar
   useEffect(() => {
-    loadFromLocalStorage();
+    fetchRoutes();
   }, []);
 
-  const loadFromLocalStorage = () => {
-    const saved = localStorage.getItem('schedulingParamsComplete');
-    if (saved) {
-      try {
-        const data = JSON.parse(saved);
-        if (data.tabla1) setTabla1(data.tabla1);
-        if (data.tabla2) setTabla2(data.tabla2);
-        if (data.tabla3) setTabla3(data.tabla3);
-        if (data.tabla4) setTabla4(data.tabla4);
-        if (data.tabla5) setTabla5(data.tabla5);
-        if (data.tabla6) setTabla6(data.tabla6);
-        if (data.tabla7) setTabla7(data.tabla7);
-      } catch (err) {
-        console.error('Error:', err);
+  // Cargar distancias cuando cambia la ruta seleccionada
+  useEffect(() => {
+    if (tabla1.numeroRuta) {
+      fetchShapesDistances(tabla1.numeroRuta);
+    }
+  }, [tabla1.numeroRuta]);
+
+  // Calcular tiempoCiclo automáticamente en Tabla 3
+  useEffect(() => {
+    const updatedTabla3 = tabla3.map(row => {
+      const tiempoCiclo = calculateTiempoCiclo(row.tiempoCB, row.tiempoBC);
+      return { ...row, tiempoCiclo };
+    });
+    
+    // Solo actualizar si hay cambios
+    if (JSON.stringify(updatedTabla3) !== JSON.stringify(tabla3)) {
+      setTabla3(updatedTabla3);
+    }
+  }, [tabla3.map(r => r.tiempoCB + r.tiempoBC).join(',')]);
+
+  // ==================== FUNCIONES DE CARGA ====================
+
+  const fetchRoutes = async () => {
+    try {
+      const res = await fetch('http://localhost:8000/admin/routes');
+      if (res.ok) {
+        const data = await res.json();
+        setRoutes(data);
+        console.log('✅ Rutas cargadas:', data.length);
       }
+    } catch (err) {
+      console.error('Error cargando rutas:', err);
+      setStatus({
+        message: '❌ Error cargando rutas',
+        type: 'error'
+      });
     }
   };
 
-  const isValidTimeFormat = (time) => {
-    if (!time) return false;
-    return /^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$/.test(time);
+  const fetchShapesDistances = async (routeId) => {
+    try {
+      console.log(`📏 Obteniendo distancias para ruta ${routeId}...`);
+      const res = await fetch(`http://localhost:8000/scheduling/shapes-distances/${routeId}`);
+      
+      if (res.ok) {
+        const data = await res.json();
+        console.log('✅ Distancias obtenidas:', data);
+        
+        setTabla1(prev => ({
+          ...prev,
+          distanciaCB: data.centro_barrio || 0,
+          distanciaBC: data.barrio_centro || 0
+        }));
+        
+        setStatus({
+          message: `📏 Distancias cargadas: C→B ${data.centro_barrio}km, B→C ${data.barrio_centro}km`,
+          type: 'success'
+        });
+      } else {
+        console.warn('⚠️ No se encontraron shapes para esta ruta');
+        setStatus({
+          message: '⚠️ No se encontraron shapes para esta ruta. Ingresa las distancias manualmente.',
+          type: 'warning'
+        });
+      }
+    } catch (err) {
+      console.error('Error obteniendo distancias:', err);
+    }
   };
 
-  const validateTimes = () => {
-    const errors = [];
-    const timeFields = [
-      { key: 'horaInicioCentro', label: 'Hora Inicio Centro' },
-      { key: 'horaInicioBarrio', label: 'Hora Inicio Barrio' },
-      { key: 'horaFinCentro', label: 'Hora Fin Centro' },
-      { key: 'horaFinBarrio', label: 'Hora Fin Barrio' }
-    ];
-
-    timeFields.forEach(field => {
-      const value = tabla1[field.key];
-      if (!value) {
-        errors.push(`${field.label} requerido`);
-      } else if (!isValidTimeFormat(value)) {
-        errors.push(`${field.label}: formato inválido`);
+  const fetchSavedScenarios = async () => {
+    setLoadingScenarios(true);
+    try {
+      const routeFilter = tabla1.numeroRuta ? `?route_id=${tabla1.numeroRuta}` : '';
+      const res = await fetch(`http://localhost:8000/scheduling/parameters${routeFilter}`);
+      
+      if (res.ok) {
+        const data = await res.json();
+        setSavedScenarios(data);
+        console.log('✅ Escenarios cargados:', data.length);
       }
-    });
+    } catch (err) {
+      console.error('Error cargando escenarios:', err);
+      setStatus({
+        message: '❌ Error cargando escenarios guardados',
+        type: 'error'
+      });
+    } finally {
+      setLoadingScenarios(false);
+    }
+  };
 
-    tabla2.forEach((row, idx) => {
-      if (!isValidTimeFormat(row.desde)) {
-        errors.push(`Tabla 2 fila ${idx + 1}: hora inválida`);
-      }
-    });
+  // ==================== HANDLERS ====================
 
-    tabla3.forEach((row, idx) => {
-      if (!isValidTimeFormat(row.desde)) errors.push(`Tabla 3 fila ${idx + 1}: Desde inválido`);
-      if (!isValidTimeFormat(row.tiempoCB)) errors.push(`Tabla 3 fila ${idx + 1}: C→B inválido`);
-      if (!isValidTimeFormat(row.tiempoBC)) errors.push(`Tabla 3 fila ${idx + 1}: B→C inválido`);
-    });
-
-    return errors;
+  const handleRouteChange = (e) => {
+    const routeId = e.target.value;
+    const route = routes.find(r => r.route_id === routeId);
+    
+    if (route) {
+      setSelectedRoute(route);
+      setTabla1(prev => ({
+        ...prev,
+        numeroRuta: route.route_id,
+        nombreRuta: route.route_long_name || route.route_short_name || ''
+      }));
+    }
   };
 
   const handleTabla1Change = (field, value) => {
     setTabla1(prev => ({ ...prev, [field]: value }));
   };
 
-  const addTabla2Row = () => setTabla2([...tabla2, { desde: '', buses: 0 }]);
-  const updateTabla2Row = (index, field, value) => {
-    const newTabla2 = [...tabla2];
-    newTabla2[index][field] = value;
-    setTabla2(newTabla2);
+  const handleTabla2Change = (index, field, value) => {
+    const updated = [...tabla2];
+    updated[index] = { ...updated[index], [field]: value };
+    setTabla2(updated);
   };
-  const deleteTabla2Row = (index) => setTabla2(tabla2.filter((_, i) => i !== index));
 
-  const addTabla3Row = () => setTabla3([...tabla3, { desde: '', tiempoCB: '', tiempoBC: '', tiempoCiclo: '' }]);
-  const updateTabla3Row = (index, field, value) => {
-    const newTabla3 = [...tabla3];
-    newTabla3[index][field] = value;
-    
-    if (field === 'tiempoCB' || field === 'tiempoBC') {
-      const tiempoCB = field === 'tiempoCB' ? value : newTabla3[index].tiempoCB;
-      const tiempoBC = field === 'tiempoBC' ? value : newTabla3[index].tiempoBC;
-      
-      if (isValidTimeFormat(tiempoCB) && isValidTimeFormat(tiempoBC)) {
-        const [h1, m1] = tiempoCB.split(':').map(Number);
-        const [h2, m2] = tiempoBC.split(':').map(Number);
-        const totalMinutes = (h1 * 60 + m1) + (h2 * 60 + m2);
-        const h = Math.floor(totalMinutes / 60);
-        const m = totalMinutes % 60;
-        newTabla3[index].tiempoCiclo = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-      }
-    }
-    
-    setTabla3(newTabla3);
+  const handleTabla3Change = (index, field, value) => {
+    const updated = [...tabla3];
+    updated[index] = { ...updated[index], [field]: value };
+    setTabla3(updated);
   };
-  const deleteTabla3Row = (index) => setTabla3(tabla3.filter((_, i) => i !== index));
+
+  const addRowTabla2 = () => {
+    setTabla2([...tabla2, { desde: '', buses: 0 }]);
+  };
+
+  const removeRowTabla2 = (index) => {
+    if (tabla2.length > 1) {
+      setTabla2(tabla2.filter((_, i) => i !== index));
+    }
+  };
+
+  const addRowTabla3 = () => {
+    setTabla3([...tabla3, { desde: '', tiempoCB: '', tiempoBC: '', tiempoCiclo: '' }]);
+  };
+
+  const removeRowTabla3 = (index) => {
+    if (tabla3.length > 1) {
+      setTabla3(tabla3.filter((_, i) => i !== index));
+    }
+  };
+
+  // ==================== CÁLCULO DE INTERVALOS ====================
 
   const handleCalculate = async () => {
-    const errors = validateTimes();
-    if (errors.length > 0) {
-      setStatus({ message: `❌ Errores:\n${errors.join('\n')}`, type: 'error' });
-      return;
-    }
-    if (tabla2.length === 0) {
-      setStatus({ message: '❌ Agregue filas en Tabla 2', type: 'error' });
-      return;
-    }
-    if (tabla3.length === 0) {
-      setStatus({ message: '❌ Agregue filas en Tabla 3', type: 'error' });
-      return;
-    }
-
-    setCalculating(true);
-    setStatus({ message: '⏳ Calculando...', type: 'loading' });
+    setCalculando(true);
+    setStatus({ message: '🔄 Calculando intervalos...', type: 'loading' });
 
     try {
-      const payload = { tabla1, tabla2, tabla3 };
-      const response = await fetch('http://localhost:8000/scheduling/calculate-intervals', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Error al calcular');
+      // Validar datos
+      if (!tabla1.numeroRuta) {
+        throw new Error('Selecciona una ruta');
+      }
+      if (tabla2.some(r => !r.desde || r.buses === 0)) {
+        throw new Error('Completa todos los datos de Flota Variable');
+      }
+      if (tabla3.some(r => !r.desde || !r.tiempoCB || !r.tiempoBC)) {
+        throw new Error('Completa todos los datos de Tiempos de Recorrido');
       }
 
-      const result = await response.json();
+      const requestData = {
+        tabla1,
+        tabla2,
+        tabla3
+      };
+
+      console.log('📤 Enviando datos:', requestData);
+
+      const res = await fetch('http://localhost:8000/scheduling/calculate-intervals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData)
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.detail || 'Error al calcular');
+      }
+
+      const result = await res.json();
+      console.log('✅ Resultados:', result);
+
+      // Actualizar tablas de resultados
       setTabla4(result.tabla4 || []);
       setTabla5(result.tabla5 || []);
       setTabla6(result.tabla6 || []);
       setTabla7(result.tabla7 || []);
 
-      setStatus({ message: `✅ Completado en ${result.tiempo_procesamiento}`, type: 'success' });
-      setTimeout(() => setStatus({ message: '', type: '' }), 3000);
+      setStatus({
+        message: `✅ Intervalos calculados correctamente! (${result.tiempo_procesamiento})`,
+        type: 'success'
+      });
+
     } catch (err) {
-      setStatus({ message: `❌ ${err.message}`, type: 'error' });
+      console.error('❌ Error:', err);
+      setStatus({
+        message: `❌ Error: ${err.message}`,
+        type: 'error'
+      });
     } finally {
-      setCalculating(false);
+      setCalculando(false);
     }
   };
 
+  // ==================== GUARDAR/CARGAR ESCENARIOS ====================
+
   const handleSave = async () => {
+    if (!scenarioName.trim()) {
+      setStatus({ message: '❌ Ingresa un nombre para el escenario', type: 'error' });
+      return;
+    }
+
     setLoading(true);
-    setStatus({ message: 'Guardando...', type: 'loading' });
+    setStatus({ message: '💾 Guardando escenario...', type: 'loading' });
+
     try {
-      const data = { tabla1, tabla2, tabla3, tabla4, tabla5, tabla6, tabla7 };
-      localStorage.setItem('schedulingParamsComplete', JSON.stringify(data));
-      const response = await fetch('http://localhost:8000/scheduling/parameters', {
+      const requestData = {
+        name: scenarioName.trim(),
+        tabla1,
+        tabla2,
+        tabla3
+      };
+
+      const res = await fetch('http://localhost:8000/scheduling/parameters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+        body: JSON.stringify(requestData)
       });
-      if (response.ok) {
-        setStatus({ message: '✅ Guardado', type: 'success' });
-        setTimeout(() => setStatus({ message: '', type: '' }), 2000);
-      } else {
-        throw new Error('Error al guardar');
+
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.detail || 'Error al guardar');
       }
+
+      const result = await res.json();
+      console.log('✅ Guardado:', result);
+
+      // Guardar también en localStorage
+      localStorage.setItem(`scheduling_scenario_${result.id}`, JSON.stringify(requestData));
+
+      setStatus({
+        message: `✅ ${result.message}`,
+        type: 'success'
+      });
+
+      setShowSaveModal(false);
+      setScenarioName('');
+
     } catch (err) {
-      setStatus({ message: `❌ ${err.message}`, type: 'error' });
+      console.error('❌ Error:', err);
+      setStatus({
+        message: `❌ Error: ${err.message}`,
+        type: 'error'
+      });
     } finally {
       setLoading(false);
     }
   };
 
+  const handleLoad = async (scenarioId) => {
+    setLoading(true);
+    setStatus({ message: '📥 Cargando escenario...', type: 'loading' });
+
+    try {
+      const res = await fetch(`http://localhost:8000/scheduling/parameters/${scenarioId}`);
+
+      if (!res.ok) {
+        throw new Error('Error al cargar escenario');
+      }
+
+      const data = await res.json();
+      console.log('✅ Escenario cargado:', data);
+
+      // Cargar datos
+      setTabla1(data.tabla1);
+      setTabla2(data.tabla2 || [{ desde: '', buses: 0 }]);
+      setTabla3(data.tabla3 || [{ desde: '', tiempoCB: '', tiempoBC: '', tiempoCiclo: '' }]);
+
+      // Limpiar resultados
+      setTabla4([]);
+      setTabla5([]);
+      setTabla6([]);
+      setTabla7([]);
+
+      setStatus({
+        message: `✅ Escenario "${data.name}" cargado correctamente`,
+        type: 'success'
+      });
+
+      setShowLoadModal(false);
+
+    } catch (err) {
+      console.error('❌ Error:', err);
+      setStatus({
+        message: `❌ Error: ${err.message}`,
+        type: 'error'
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (scenarioId, scenarioName) => {
+    if (!window.confirm(`¿Eliminar el escenario "${scenarioName}"?`)) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`http://localhost:8000/scheduling/parameters/${scenarioId}`, {
+        method: 'DELETE'
+      });
+
+      if (!res.ok) {
+        throw new Error('Error al eliminar');
+      }
+
+      setStatus({
+        message: `✅ Escenario "${scenarioName}" eliminado`,
+        type: 'success'
+      });
+
+      // Recargar lista
+      fetchSavedScenarios();
+
+    } catch (err) {
+      console.error('❌ Error:', err);
+      setStatus({
+        message: `❌ Error al eliminar: ${err.message}`,
+        type: 'error'
+      });
+    }
+  };
+
+  // ==================== UTILIDADES ====================
+
+  const calculateTiempoCiclo = (tiempoCB, tiempoBC) => {
+    if (!tiempoCB || !tiempoBC) return '';
+
+    const [h1, m1] = tiempoCB.split(':').map(Number);
+    const [h2, m2] = tiempoBC.split(':').map(Number);
+
+    const totalMinutes = (h1 * 60 + m1) + (h2 * 60 + m2);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  };
+
+  const formatHeadway = (headway) => {
+    if (typeof headway === 'number') {
+      return `${headway} min`;
+    }
+    return headway || '';
+  };
+
+  // ==================== RENDER ====================
+
   return (
-    <div className="p-3">
-      <div className="mb-3">
-        <h1 className="text-lg font-bold mb-1">Parámetros de Programación</h1>
-        <p className="text-xs text-gray-600">ℹ️ Formato <strong>HH:MM</strong> (ej: 05:30)</p>
-      </div>
+    <div className="scheduling-container">
+      <h1>📋 Programación de Rutas</h1>
 
-      <div className="flex gap-2 mb-3">
-        <button onClick={handleCalculate} disabled={calculating}
-          className="px-3 py-1.5 text-sm rounded font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400">
-          {calculating ? '⏳ Calculando...' : '🔢 Calcular'}
-        </button>
-        <button onClick={handleSave} disabled={loading}
-          className="px-3 py-1.5 text-sm rounded font-semibold bg-green-600 text-white hover:bg-green-700 disabled:bg-gray-400">
-          {loading ? '💾 Guardando...' : '💾 Guardar'}
-        </button>
-      </div>
-
+      {/* Barra de estado */}
       {status.message && (
-        <div className={`p-2 mb-3 rounded text-sm whitespace-pre-line ${
-          status.type === 'success' ? 'bg-green-100 text-green-800' :
-          status.type === 'error' ? 'bg-red-100 text-red-800' : 'bg-blue-100 text-blue-800'
-        }`}>
+        <div className={`status-message ${status.type}`}>
           {status.message}
         </div>
       )}
 
-      {/* TABLA 1 */}
-      <div className="bg-white p-3 rounded shadow mb-3">
-        <h2 className="text-sm font-semibold mb-2 pb-1 border-b">Tabla 1: Parámetros Generales</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <div>
-            <label className="block text-xs font-medium mb-1">Número Ruta</label>
-            <input type="text" value={tabla1.numeroRuta} onChange={(e) => handleTabla1Change('numeroRuta', e.target.value)}
-              className="w-full p-1 text-sm border rounded" placeholder="100" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Nombre Ruta</label>
-            <input type="text" value={tabla1.nombreRuta} onChange={(e) => handleTabla1Change('nombreRuta', e.target.value)}
-              className="w-full p-1 text-sm border rounded" placeholder="PRUEBA RUTA 100" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Periodicidad</label>
-            <input type="text" value={tabla1.periodicidad} onChange={(e) => handleTabla1Change('periodicidad', e.target.value)}
-              className="w-full p-1 text-sm border rounded" placeholder="L-V" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Hora Inicio Centro</label>
-            <input type="text" value={tabla1.horaInicioCentro} onChange={(e) => handleTabla1Change('horaInicioCentro', e.target.value)}
-              className="w-full p-1 text-sm border rounded" placeholder="03:54" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Hora Inicio Barrio</label>
-            <input type="text" value={tabla1.horaInicioBarrio} onChange={(e) => handleTabla1Change('horaInicioBarrio', e.target.value)}
-              className="w-full p-1 text-sm border rounded" placeholder="04:30" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Hora Fin Centro</label>
-            <input type="text" value={tabla1.horaFinCentro} onChange={(e) => handleTabla1Change('horaFinCentro', e.target.value)}
-              className="w-full p-1 text-sm border rounded" placeholder="22:58" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Hora Fin Barrio</label>
-            <input type="text" value={tabla1.horaFinBarrio} onChange={(e) => handleTabla1Change('horaFinBarrio', e.target.value)}
-              className="w-full p-1 text-sm border rounded" placeholder="22:46" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Dwell Centro (seg)</label>
-            <input type="number" value={tabla1.dwellCentro} onChange={(e) => handleTabla1Change('dwellCentro', parseInt(e.target.value) || 0)}
-              className="w-full p-1 text-sm border rounded" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Dwell Barrio (seg)</label>
-            <input type="number" value={tabla1.dwellBarrio} onChange={(e) => handleTabla1Change('dwellBarrio', parseInt(e.target.value) || 0)}
-              className="w-full p-1 text-sm border rounded" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Distancia C→B (km)</label>
-            <input type="number" step="0.1" value={tabla1.distanciaCB} onChange={(e) => handleTabla1Change('distanciaCB', parseFloat(e.target.value) || 0)}
-              className="w-full p-1 text-sm border rounded" />
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1">Distancia B→C (km)</label>
-            <input type="number" step="0.1" value={tabla1.distanciaBC} onChange={(e) => handleTabla1Change('distanciaBC', parseFloat(e.target.value) || 0)}
-              className="w-full p-1 text-sm border rounded" />
-          </div>
-        </div>
+      {/* Botones principales */}
+      <div className="main-buttons">
+        <button onClick={() => { setShowLoadModal(true); fetchSavedScenarios(); }} className="btn-secondary">
+          📥 Cargar Escenario
+        </button>
+        <button onClick={() => setShowSaveModal(true)} className="btn-secondary">
+          💾 Guardar Escenario
+        </button>
+        <button onClick={handleCalculate} disabled={calculando} className="btn-primary">
+          {calculando ? '⏳ Calculando...' : '🔢 Calcular Intervalos'}
+        </button>
       </div>
 
-      {/* TABLA 2 */}
-      <div className="bg-white p-3 rounded shadow mb-3">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="text-sm font-semibold">Tabla 2: Flota Variable</h2>
-          <button onClick={addTabla2Row} className="px-3 py-1 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700">
-            ➕ Añadir
-          </button>
-        </div>
-        {tabla2.length === 0 ? (
-          <p className="text-xs text-gray-500 italic">Sin filas. Click en "Añadir".</p>
-        ) : (
-          <table className="w-full border-collapse text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="border p-1 text-left text-xs">Desde (HH:MM)</th>
-                <th className="border p-1 text-left text-xs">Buses</th>
-                <th className="border p-1 w-10"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {tabla2.map((row, idx) => (
-                <tr key={idx}>
-                  <td className="border p-1">
-                    <input type="text" value={row.desde} onChange={(e) => updateTabla2Row(idx, 'desde', e.target.value)}
-                      className="w-full p-1 text-sm border rounded" placeholder="05:00" />
-                  </td>
-                  <td className="border p-1">
-                    <input type="number" value={row.buses} onChange={(e) => updateTabla2Row(idx, 'buses', parseInt(e.target.value) || 0)}
-                      className="w-full p-1 text-sm border rounded" />
-                  </td>
-                  <td className="border p-1 text-center">
-                    <button onClick={() => deleteTabla2Row(idx)} className="text-red-600 hover:text-red-800">🗑️</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {/* ========== TABLA 1: PARÁMETROS GENERALES ========== */}
+      <section className="table-section">
+        <h2>📊 Tabla 1: Parámetros Generales</h2>
 
-      {/* TABLA 3 */}
-      <div className="bg-white p-3 rounded shadow mb-3">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="text-sm font-semibold">Tabla 3: Tiempos de Recorrido</h2>
-          <button onClick={addTabla3Row} className="px-3 py-1 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-700">
-            ➕ Añadir
-          </button>
-        </div>
-        {tabla3.length === 0 ? (
-          <p className="text-xs text-gray-500 italic">Sin filas. Click en "Añadir".</p>
-        ) : (
-          <table className="w-full border-collapse text-sm">
-            <thead className="bg-gray-100">
-              <tr>
-                <th className="border p-1 text-left text-xs">Desde</th>
-                <th className="border p-1 text-left text-xs">C→B</th>
-                <th className="border p-1 text-left text-xs">B→C</th>
-                <th className="border p-1 text-left text-xs">Ciclo</th>
-                <th className="border p-1 w-10"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {tabla3.map((row, idx) => (
-                <tr key={idx}>
-                  <td className="border p-1">
-                    <input type="text" value={row.desde} onChange={(e) => updateTabla3Row(idx, 'desde', e.target.value)}
-                      className="w-full p-1 text-sm border rounded" placeholder="05:00" />
-                  </td>
-                  <td className="border p-1">
-                    <input type="text" value={row.tiempoCB} onChange={(e) => updateTabla3Row(idx, 'tiempoCB', e.target.value)}
-                      className="w-full p-1 text-sm border rounded" placeholder="00:36" />
-                  </td>
-                  <td className="border p-1">
-                    <input type="text" value={row.tiempoBC} onChange={(e) => updateTabla3Row(idx, 'tiempoBC', e.target.value)}
-                      className="w-full p-1 text-sm border rounded" placeholder="00:36" />
-                  </td>
-                  <td className="border p-1 bg-gray-50">
-                    <input type="text" value={row.tiempoCiclo} readOnly
-                      className="w-full p-1 text-xs border rounded bg-gray-100" />
-                  </td>
-                  <td className="border p-1 text-center">
-                    <button onClick={() => deleteTabla3Row(idx)} className="text-red-600 hover:text-red-800">🗑️</button>
-                  </td>
-                </tr>
+        <div className="form-grid">
+          {/* Selector de Ruta */}
+          <div className="form-group">
+            <label>Ruta *</label>
+            <select 
+              value={tabla1.numeroRuta} 
+              onChange={handleRouteChange}
+              className="form-control"
+            >
+              <option value="">-- Seleccionar Ruta --</option>
+              {routes.map(route => (
+                <option key={route.route_id} value={route.route_id}>
+                  {route.route_short_name} - {route.route_long_name || route.route_id}
+                </option>
               ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+            </select>
+          </div>
 
-      {/* RESULTADOS */}
-      {tabla4.length > 0 && (
-        <div className="bg-white p-3 rounded shadow mb-3">
-          <h2 className="text-sm font-semibold mb-2">✨ Tabla 4: Intervalos Centro</h2>
-          <table className="w-full border-collapse text-xs">
-            <thead className="bg-green-100">
-              <tr>
-                <th className="border p-1">Desde</th>
-                <th className="border p-1">Hasta</th>
-                <th className="border p-1">Headway</th>
+          <div className="form-group">
+            <label>Nombre de Ruta</label>
+            <input
+              type="text"
+              value={tabla1.nombreRuta}
+              onChange={(e) => handleTabla1Change('nombreRuta', e.target.value)}
+              placeholder="Nombre descriptivo"
+              className="form-control"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Periodicidad</label>
+            <select
+              value={tabla1.periodicidad}
+              onChange={(e) => handleTabla1Change('periodicidad', e.target.value)}
+              className="form-control"
+            >
+              <option value="">-- Seleccionar --</option>
+              <option value="Lunes-Viernes">Lunes-Viernes</option>
+              <option value="Sábado">Sábado</option>
+              <option value="Domingo">Domingo</option>
+              <option value="Diario">Diario</option>
+            </select>
+          </div>
+
+          <div className="form-group">
+            <label>Hora Inicio Centro (HH:MM)</label>
+            <input
+              type="text"
+              value={tabla1.horaInicioCentro}
+              onChange={(e) => handleTabla1Change('horaInicioCentro', e.target.value)}
+              placeholder="05:00"
+              className="form-control"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Hora Inicio Barrio (HH:MM)</label>
+            <input
+              type="text"
+              value={tabla1.horaInicioBarrio}
+              onChange={(e) => handleTabla1Change('horaInicioBarrio', e.target.value)}
+              placeholder="05:30"
+              className="form-control"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Hora Fin Centro (HH:MM)</label>
+            <input
+              type="text"
+              value={tabla1.horaFinCentro}
+              onChange={(e) => handleTabla1Change('horaFinCentro', e.target.value)}
+              placeholder="22:00"
+              className="form-control"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Hora Fin Barrio (HH:MM)</label>
+            <input
+              type="text"
+              value={tabla1.horaFinBarrio}
+              onChange={(e) => handleTabla1Change('horaFinBarrio', e.target.value)}
+              placeholder="22:30"
+              className="form-control"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Dwell Centro (min)</label>
+            <input
+              type="number"
+              value={tabla1.dwellCentro}
+              onChange={(e) => handleTabla1Change('dwellCentro', parseInt(e.target.value) || 0)}
+              className="form-control"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Dwell Barrio (min)</label>
+            <input
+              type="number"
+              value={tabla1.dwellBarrio}
+              onChange={(e) => handleTabla1Change('dwellBarrio', parseInt(e.target.value) || 0)}
+              className="form-control"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Distancia C→B (km) 🔄</label>
+            <input
+              type="number"
+              step="0.01"
+              value={tabla1.distanciaCB}
+              onChange={(e) => handleTabla1Change('distanciaCB', parseFloat(e.target.value) || 0)}
+              className="form-control"
+              readOnly
+              title="Se obtiene automáticamente del shape .1"
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Distancia B→C (km) 🔄</label>
+            <input
+              type="number"
+              step="0.01"
+              value={tabla1.distanciaBC}
+              onChange={(e) => handleTabla1Change('distanciaBC', parseFloat(e.target.value) || 0)}
+              className="form-control"
+              readOnly
+              title="Se obtiene automáticamente del shape .2"
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* ========== TABLA 2: FLOTA VARIABLE ========== */}
+      <section className="table-section">
+        <h2>🚌 Tabla 2: Flota Variable</h2>
+        
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Desde (HH:MM)</th>
+              <th>Cantidad de Buses</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tabla2.map((row, idx) => (
+              <tr key={idx}>
+                <td>
+                  <input
+                    type="text"
+                    value={row.desde}
+                    onChange={(e) => handleTabla2Change(idx, 'desde', e.target.value)}
+                    placeholder="07:00"
+                    className="form-control"
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    value={row.buses}
+                    onChange={(e) => handleTabla2Change(idx, 'buses', parseInt(e.target.value) || 0)}
+                    className="form-control"
+                  />
+                </td>
+                <td>
+                  <button onClick={() => removeRowTabla2(idx)} className="btn-delete">
+                    🗑️
+                  </button>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {tabla4.map((row, idx) => (
-                <tr key={idx} className="bg-green-50">
-                  <td className="border p-1">{row.desde}</td>
-                  <td className="border p-1">{row.hasta}</td>
-                  <td className="border p-1">{row.headway} min</td>
+            ))}
+          </tbody>
+        </table>
+        
+        <button onClick={addRowTabla2} className="btn-add">
+          ➕ Agregar Fila
+        </button>
+      </section>
+
+      {/* ========== TABLA 3: TIEMPOS DE RECORRIDO ========== */}
+      <section className="table-section">
+        <h2>⏱️ Tabla 3: Tiempos de Recorrido</h2>
+        
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Desde (HH:MM)</th>
+              <th>Tiempo C→B (HH:MM)</th>
+              <th>Tiempo B→C (HH:MM)</th>
+              <th>Tiempo Ciclo 🔄</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {tabla3.map((row, idx) => (
+              <tr key={idx}>
+                <td>
+                  <input
+                    type="text"
+                    value={row.desde}
+                    onChange={(e) => handleTabla3Change(idx, 'desde', e.target.value)}
+                    placeholder="00:00"
+                    className="form-control"
+                  />
+                </td>
+                <td>
+                  <input
+                    type="text"
+                    value={row.tiempoCB}
+                    onChange={(e) => handleTabla3Change(idx, 'tiempoCB', e.target.value)}
+                    placeholder="00:30"
+                    className="form-control"
+                  />
+                </td>
+                <td>
+                  <input
+                    type="text"
+                    value={row.tiempoBC}
+                    onChange={(e) => handleTabla3Change(idx, 'tiempoBC', e.target.value)}
+                    placeholder="00:30"
+                    className="form-control"
+                  />
+                </td>
+                <td>
+                  <input
+                    type="text"
+                    value={row.tiempoCiclo}
+                    readOnly
+                    className="form-control readonly"
+                    title="Se calcula automáticamente"
+                  />
+                </td>
+                <td>
+                  <button onClick={() => removeRowTabla3(idx)} className="btn-delete">
+                    🗑️
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        
+        <button onClick={addRowTabla3} className="btn-add">
+          ➕ Agregar Fila
+        </button>
+      </section>
+
+      {/* ========== RESULTADOS ========== */}
+      {(tabla4.length > 0 || tabla5.length > 0) && (
+        <>
+          {/* Tabla 4: Intervalos Centro */}
+          <section className="table-section results">
+            <h2>📊 Tabla 4: Intervalos de Paso en Centro</h2>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Desde</th>
+                  <th>Hasta</th>
+                  <th>Headway</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {tabla4.map((row, idx) => (
+                  <tr key={idx}>
+                    <td>{row.desde}</td>
+                    <td>{row.hasta}</td>
+                    <td>{formatHeadway(row.headway)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
+          {/* Tabla 5: Intervalos Barrio */}
+          <section className="table-section results">
+            <h2>📊 Tabla 5: Intervalos de Paso en Barrio</h2>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Desde</th>
+                  <th>Hasta</th>
+                  <th>Headway</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tabla5.map((row, idx) => (
+                  <tr key={idx}>
+                    <td>{row.desde}</td>
+                    <td>{row.hasta}</td>
+                    <td>{formatHeadway(row.headway)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
+          {/* Tabla 6: Tiempos C→B */}
+          <section className="table-section results">
+            <h2>⏱️ Tabla 6: Tiempos de Recorrido C→B</h2>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Desde</th>
+                  <th>Hasta</th>
+                  <th>Tiempo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tabla6.map((row, idx) => (
+                  <tr key={idx}>
+                    <td>{row.desde}</td>
+                    <td>{row.hasta}</td>
+                    <td>{row.tiempo}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+
+          {/* Tabla 7: Tiempos B→C */}
+          <section className="table-section results">
+            <h2>⏱️ Tabla 7: Tiempos de Recorrido B→C</h2>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Desde</th>
+                  <th>Hasta</th>
+                  <th>Tiempo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tabla7.map((row, idx) => (
+                  <tr key={idx}>
+                    <td>{row.desde}</td>
+                    <td>{row.hasta}</td>
+                    <td>{row.tiempo}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        </>
+      )}
+
+      {/* ========== MODAL GUARDAR ========== */}
+      {showSaveModal && (
+        <div className="modal-overlay" onClick={() => setShowSaveModal(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>💾 Guardar Escenario</h3>
+            
+            <div className="form-group">
+              <label>Nombre del Escenario *</label>
+              <input
+                type="text"
+                value={scenarioName}
+                onChange={(e) => setScenarioName(e.target.value)}
+                placeholder="Ej: Programación Ruta 1 L-V"
+                className="form-control"
+                autoFocus
+              />
+              <small className="help-text">
+                Ejemplo: "Programación Ruta {tabla1.numeroRuta || '1'} {tabla1.periodicidad || 'L-V'}"
+              </small>
+            </div>
+
+            <div className="modal-buttons">
+              <button onClick={() => setShowSaveModal(false)} className="btn-secondary">
+                Cancelar
+              </button>
+              <button onClick={handleSave} disabled={loading} className="btn-primary">
+                {loading ? '⏳ Guardando...' : '💾 Guardar'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
-      {tabla5.length > 0 && (
-        <div className="bg-white p-3 rounded shadow mb-3">
-          <h2 className="text-sm font-semibold mb-2">✨ Tabla 5: Intervalos Barrio</h2>
-          <table className="w-full border-collapse text-xs">
-            <thead className="bg-blue-100">
-              <tr>
-                <th className="border p-1">Desde</th>
-                <th className="border p-1">Hasta</th>
-                <th className="border p-1">Headway</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tabla5.map((row, idx) => (
-                <tr key={idx} className="bg-blue-50">
-                  <td className="border p-1">{row.desde}</td>
-                  <td className="border p-1">{row.hasta}</td>
-                  <td className="border p-1">{row.headway} min</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {/* ========== MODAL CARGAR ========== */}
+      {showLoadModal && (
+        <div className="modal-overlay" onClick={() => setShowLoadModal(false)}>
+          <div className="modal-content large" onClick={(e) => e.stopPropagation()}>
+            <h3>📥 Cargar Escenario</h3>
 
-      {tabla6.length > 0 && (
-        <div className="bg-white p-3 rounded shadow mb-3">
-          <h2 className="text-sm font-semibold mb-2">✨ Tabla 6: Tiempos C→B</h2>
-          <table className="w-full border-collapse text-xs">
-            <thead className="bg-yellow-100">
-              <tr>
-                <th className="border p-1">Desde</th>
-                <th className="border p-1">Hasta</th>
-                <th className="border p-1">Tiempo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tabla6.map((row, idx) => (
-                <tr key={idx} className="bg-yellow-50">
-                  <td className="border p-1">{row.desde}</td>
-                  <td className="border p-1">{row.hasta}</td>
-                  <td className="border p-1">{row.tiempo}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+            {loadingScenarios ? (
+              <p className="text-center">⏳ Cargando escenarios...</p>
+            ) : savedScenarios.length === 0 ? (
+              <p className="text-center empty-state">
+                No hay escenarios guardados
+              </p>
+            ) : (
+              <div className="scenarios-list">
+                {savedScenarios.map((scenario) => (
+                  <div key={scenario.id} className="scenario-card">
+                    <div className="scenario-info">
+                      <h4>{scenario.name}</h4>
+                      <p className="scenario-meta">
+                        Ruta: {scenario.route_id} • {scenario.periodicidad}
+                      </p>
+                      <p className="scenario-date">
+                        Actualizado: {new Date(scenario.updated_at).toLocaleString('es-MX')}
+                      </p>
+                    </div>
+                    <div className="scenario-actions">
+                      <button
+                        onClick={() => handleLoad(scenario.id)}
+                        className="btn-primary"
+                      >
+                        📥 Cargar
+                      </button>
+                      <button
+                        onClick={() => handleDelete(scenario.id, scenario.name)}
+                        className="btn-delete"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
-      {tabla7.length > 0 && (
-        <div className="bg-white p-3 rounded shadow mb-3">
-          <h2 className="text-sm font-semibold mb-2">✨ Tabla 7: Tiempos B→C</h2>
-          <table className="w-full border-collapse text-xs">
-            <thead className="bg-purple-100">
-              <tr>
-                <th className="border p-1">Desde</th>
-                <th className="border p-1">Hasta</th>
-                <th className="border p-1">Tiempo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {tabla7.map((row, idx) => (
-                <tr key={idx} className="bg-purple-50">
-                  <td className="border p-1">{row.desde}</td>
-                  <td className="border p-1">{row.hasta}</td>
-                  <td className="border p-1">{row.tiempo}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            <div className="modal-buttons">
+              <button onClick={() => setShowLoadModal(false)} className="btn-secondary">
+                Cerrar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
+
+export default SchedulingParametersV3;
