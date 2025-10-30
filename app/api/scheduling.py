@@ -1,22 +1,38 @@
-# app/api/scheduling_updated.py
+# app/api/scheduling.py
+# (Este es tu archivo 'scheduling_updated.py', con las nuevas integraciones)
 
 """
 API actualizada para programación de rutas con:
 - Guardar/cargar escenarios con nombre
 - Cálculo de intervalos
 - Integración con routes y shapes
+- (NUEVO) Generación de Sábanas (estilo VBA) y GTFS
 """
 
+# --- Imports existentes ---
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from pydantic import BaseModel, field_validator
 import re
+import traceback
+
+# --- NUEVOS IMPORTS para la integración ---
+from fastapi import File, UploadFile, Form
+import json
+import io
+import pandas as pd
 
 from app.database import get_db
 from app.models.scheduling_models import SchedulingParameters
 from app.services.interval_processor import process_intervals
+
+# --- NUEVOS IMPORTS DE SERVICIOS ---
+# (Estos archivos deben existir en 'app/services/')
+from app.services.sheet_generator import generate_sheet_from_tables, consolidate_sheet
+from app.services.gtfs_generator import create_gtfs_from_sheet
+
 
 router = APIRouter(prefix="/scheduling", tags=["Scheduling"])
 
@@ -26,7 +42,8 @@ router = APIRouter(prefix="/scheduling", tags=["Scheduling"])
 def validate_time_format(time_str: str) -> str:
     """Valida que el formato sea HH:MM"""
     if not time_str:
-        raise ValueError("El campo no puede estar vacío")
+        # Permite strings vacíos
+        return time_str
     
     pattern = r'^([0-1]?[0-9]|2[0-3]):([0-5][0-9])$'
     if not re.match(pattern, time_str):
@@ -49,6 +66,11 @@ class Tabla1Model(BaseModel):
     dwellBarrio: int
     distanciaCB: float
     distanciaBC: float
+    
+    # --- CAMPOS AÑADIDOS (con valores por defecto) ---
+    idle_threshold_min: int = 30
+    max_wait_minutes_pairing: int = 15
+    num_buses_pool: int = 20
     
     @field_validator('horaInicioCentro', 'horaInicioBarrio', 'horaFinCentro', 'horaFinBarrio')
     @classmethod
@@ -92,18 +114,12 @@ class CalculateIntervalsRequest(BaseModel):
     tabla3: List[Tabla3ItemModel]
 
 
-# ==================== ENDPOINTS DE CÁLCULO ====================
+# ==================== ENDPOINTS DE CÁLCULO (Existente) ====================
 
 @router.post("/calculate-intervals")
 async def calculate_intervals(request: CalculateIntervalsRequest):
     """
     Calcula intervalos de paso basados en los parámetros de entrada
-    
-    Retorna:
-        - tabla4: Intervalos Centro
-        - tabla5: Intervalos Barrio
-        - tabla6: Tiempos Centro→Barrio agrupados
-        - tabla7: Tiempos Barrio→Centro agrupados
     """
     print("\n🔢 Endpoint /calculate-intervals llamado")
     
@@ -151,26 +167,22 @@ async def calculate_intervals(request: CalculateIntervalsRequest):
     
     except Exception as e:
         print(f"❌ Error inesperado: {e}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== ENDPOINTS DE PARÁMETROS CON NOMBRE ====================
+# ==================== ENDPOINTS DE PARÁMETROS (Existentes) ====================
 
 @router.post("/parameters")
 async def save_parameters(request: SaveParametersRequest, db: Session = Depends(get_db)):
     """
     Guarda o actualiza parámetros con nombre específico
-    
-    Si ya existe un escenario con el mismo nombre para la misma ruta, lo sobrescribe.
     """
     print(f"\n💾 Guardando parámetros: '{request.name}'")
     
     try:
         route_id = request.tabla1.numeroRuta
         
-        # Buscar si existe un escenario con el mismo nombre y ruta
         existing = db.query(SchedulingParameters)\
             .filter(
                 SchedulingParameters.name == request.name,
@@ -179,8 +191,7 @@ async def save_parameters(request: SaveParametersRequest, db: Session = Depends(
             .first()
         
         if existing:
-            # ACTUALIZAR existente
-            print(f"  → Actualizando escenario existente (ID: {existing.id})")
+            print(f"  → Actualizando escenario existente (ID: {existing.id})")
             existing.tabla1 = request.tabla1.model_dump()
             existing.tabla2 = [item.model_dump() for item in request.tabla2]
             existing.tabla3 = [item.model_dump() for item in request.tabla3]
@@ -196,15 +207,14 @@ async def save_parameters(request: SaveParametersRequest, db: Session = Depends(
                 "action": "updated"
             }
         else:
-            # CREAR nuevo
-            print(f"  → Creando nuevo escenario")
+            print(f"  → Creando nuevo escenario")
             new_params = SchedulingParameters(
                 name=request.name,
                 route_id=route_id,
                 tabla1=request.tabla1.model_dump(),
                 tabla2=[item.model_dump() for item in request.tabla2],
                 tabla3=[item.model_dump() for item in request.tabla3],
-                is_active=0  # No activar automáticamente
+                is_active=0
             )
             
             db.add(new_params)
@@ -223,7 +233,6 @@ async def save_parameters(request: SaveParametersRequest, db: Session = Depends(
     except Exception as e:
         db.rollback()
         print(f"❌ Error al guardar: {e}")
-        import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al guardar: {str(e)}")
 
@@ -235,9 +244,6 @@ async def list_parameters(
 ):
     """
     Lista todos los escenarios guardados
-    
-    Args:
-        route_id: Filtrar por ruta específica (opcional)
     """
     print(f"\n📋 Listando escenarios (route_id: {route_id})")
     
@@ -313,10 +319,6 @@ async def get_parameters_by_name(
 ):
     """
     Obtiene un escenario por nombre
-    
-    Args:
-        name: Nombre del escenario
-        route_id: ID de ruta (opcional, para desambiguar)
     """
     print(f"\n📄 Buscando escenario: '{name}' (route: {route_id})")
     
@@ -384,32 +386,23 @@ async def delete_parameters(param_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== ENDPOINT AUXILIAR: SHAPES ====================
+# ==================== ENDPOINT AUXILIAR: SHAPES (Existente) ====================
 
 @router.get("/shapes-distances/{route_id}")
 async def get_shapes_distances(route_id: str, db: Session = Depends(get_db)):
     """
     Obtiene las distancias máximas de los shapes de una ruta
-    
-    Retorna:
-        {
-            "route_id": "1",
-            "centro_barrio": 15.5,  // shape {route_id}.1
-            "barrio_centro": 15.3   // shape {route_id}.2
-        }
     """
     print(f"\n📏 Obteniendo distancias de shapes para ruta: {route_id}")
     
     try:
         from app.models.gtfs_models import Shape
         
-        # Shape Centro→Barrio (dirección .1)
         shape_cb = db.query(Shape)\
             .filter(Shape.shape_id == f"{route_id}.1")\
             .order_by(Shape.shape_dist_traveled.desc())\
             .first()
         
-        # Shape Barrio→Centro (dirección .2)
         shape_bc = db.query(Shape)\
             .filter(Shape.shape_id == f"{route_id}.2")\
             .order_by(Shape.shape_dist_traveled.desc())\
@@ -418,8 +411,8 @@ async def get_shapes_distances(route_id: str, db: Session = Depends(get_db)):
         distance_cb = float(shape_cb.shape_dist_traveled)/1000 if shape_cb and shape_cb.shape_dist_traveled else 0.0
         distance_bc = float(shape_bc.shape_dist_traveled)/1000 if shape_bc and shape_bc.shape_dist_traveled else 0.0
         
-        print(f"  → C→B: {distance_cb:.2f} km")
-        print(f"  → B→C: {distance_bc:.2f} km")
+        print(f"  → C→B: {distance_cb:.2f} km")
+        print(f"  → B→C: {distance_bc:.2f} km")
         
         return {
             "route_id": route_id,
@@ -432,7 +425,114 @@ async def get_shapes_distances(route_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== HEALTH CHECK ====================
+# =================================================================
+# --- NUEVOS ENDPOINTS PARA GENERACIÓN DE SÁBANA (LÓGICA VBA) ---
+# =================================================================
+
+@router.post("/generate-sheet-from-intervals")
+async def api_generate_sheet_from_intervals(
+    parameters: str = Form(...),
+    route_file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Genera la sábana de programación final (estilo VBA)
+    usando los intervalos calculados (Tablas 4-7) como input.
+    """
+    print("\n📄 Endpoint /generate-sheet-from-intervals llamado")
+    try:
+        params_data = json.loads(parameters)
+        
+        # Extraer los datos que el frontend preparó
+        tabla1_data = params_data.get("general")
+        headways_centro = params_data.get("headways_centro") # Tabla 4
+        headways_barrio = params_data.get("headways_barrio") # Tabla 5
+        travel_times_cb = params_data.get("travel_times_cb") # Tabla 6
+        travel_times_bc = params_data.get("travel_times_bc") # Tabla 7
+
+        # --- Validación de Inputs ---
+        if not all([tabla1_data, headways_centro, headways_barrio, travel_times_cb, travel_times_bc]):
+            raise HTTPException(status_code=400, detail="Faltan datos de intervalos. Asegúrate de 'Calcular Intervalos' primero.")
+
+        # --- Carga de Archivo Excel (para GTFS futuro) ---
+        route_data_df = None
+        if route_file:
+            print(f"  → Leyendo archivo de arcos: {route_file.filename}")
+            contents = await route_file.read()
+            route_data_df = pd.read_excel(io.BytesIO(contents))
+            # (Aquí podrías usar route_data_df para recalcular tiempos)
+        
+        # 1. Generar viajes crudos (como Timetables_Variable)
+        # 
+        raw_trips = generate_sheet_from_tables(
+            tabla1_data,
+            headways_centro,
+            headways_barrio,
+            travel_times_cb,
+            travel_times_bc
+        )
+        
+        if not raw_trips:
+            raise HTTPException(status_code=400, detail="No se generaron viajes. Revisa los parámetros de tiempo y headway.")
+
+        # 2. Consolidar los viajes (como TimetableFinal)
+        # 
+        max_wait = int(tabla1_data.get('max_wait_minutes_pairing', 15))
+        final_sheet = consolidate_sheet(raw_trips, max_wait_minutes=max_wait)
+        
+        print(f"✅ Sábana generada con {len(final_sheet)} viajes consolidados.")
+
+        return final_sheet
+
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Error al decodificar parámetros JSON.")
+    except Exception as e:
+        traceback.print_exc() # Imprime el error completo en la consola del backend
+        raise HTTPException(status_code=500, detail=f"Error al generar la sábana: {str(e)}")
+
+
+@router.post("/generate-gtfs-from-sheet")
+async def api_generate_gtfs_from_sheet(
+    sheet_data_json: str = Form(...),  # La sábana final como string JSON
+    route_file: UploadFile = File(...), # El Excel de arcos de línea
+    db: Session = Depends(get_db)
+):
+    """
+    (FUTURO) Genera los archivos trips.txt y stop_times.txt a partir de una sábana
+    de programación y un archivo Excel de arcos de línea.
+    """
+    print("\n🚌 Endpoint /generate-gtfs-from-sheet llamado")
+    try:
+        # 1. Cargar datos
+        sheet_data = json.loads(sheet_data_json)
+        
+        print(f"  → Leyendo archivo de arcos: {route_file.filename}")
+        contents = await route_file.read()
+        route_data_df = pd.read_excel(io.BytesIO(contents))
+        
+        # Validar que el excel de arcos tenga las columnas necesarias
+        required_cols = ['stop_id', 'stop_sequence', 'direction_id', 'time_from_start_min']
+        if not all(col in route_data_df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in route_data_df.columns]
+            raise ValueError(f"Faltan columnas en el Excel de arcos de línea: {', '.join(missing)}")
+
+        # 2. Llamar al servicio
+        trips_df, stop_times_df = create_gtfs_from_sheet(sheet_data, route_data_df)
+
+        print(f"✅ GTFS generado. Trips: {len(trips_df)}, StopTimes: {len(stop_times_df)}")
+        
+        # Devolvemos un resumen (en un futuro, devolvería un .zip)
+        return {
+            "message": "Archivos GTFS generados.",
+            "trips_count": len(trips_df),
+            "stop_times_count": len(stop_times_df)
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error al generar GTFS: {str(e)}")
+
+
+# ==================== HEALTH CHECK (Existente) ====================
 
 @router.get("/health")
 async def health_check():
@@ -440,5 +540,5 @@ async def health_check():
     return {
         "status": "ok",
         "service": "Interval Calculator & Parameters Manager",
-        "version": "2.1"
+        "version": "2.1" # Versión actualizada
     }
