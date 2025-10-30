@@ -487,7 +487,8 @@ function SchedulingParametersV3() {
               <option value="Lunes-Viernes">Lunes-Viernes</option>
               <option value="Sábado">Sábado</option>
               <option value="Domingo">Domingo</option>
-              <option value="Diario">Diario</option>
+              <option value="L-M">Lunes-Martes</option>
+              <option value="X-V">Miércoles-Viernes</option>
             </select>
           </div>
 
