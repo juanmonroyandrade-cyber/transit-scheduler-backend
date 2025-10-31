@@ -492,44 +492,122 @@ async def api_generate_sheet_from_intervals(
 
 
 @router.post("/generate-gtfs-from-sheet")
-async def api_generate_gtfs_from_sheet(
-    sheet_data_json: str = Form(...),  # La sábana final como string JSON
-    route_file: UploadFile = File(...), # El Excel de arcos de línea
+async def generate_gtfs_from_sheet_endpoint(
+    sheet_data_json: str = Form(...),
+    route_id: str = Form(...),
+    route_name: str = Form(...),
+    service_id: str = Form(...),
+    periodicity: str = Form(...),
+    shape_id_s1: str = Form(...),
+    shape_id_s2: str = Form(...),
+    bikes_allowed: int = Form(0),
+    use_existing_route: bool = Form(False),
+    stops_file: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
-    """
-    (FUTURO) Genera los archivos trips.txt y stop_times.txt a partir de una sábana
-    de programación y un archivo Excel de arcos de línea.
-    """
-    print("\n🚌 Endpoint /generate-gtfs-from-sheet llamado")
+    """Genera trips y stop_times desde sábana consolidada"""
+    print(f"\n🚀 Generando GTFS para Ruta: {route_id}, Servicio: {service_id}")
     try:
-        # 1. Cargar datos
+        import json
+        import io
         sheet_data = json.loads(sheet_data_json)
         
-        print(f"  → Leyendo archivo de arcos: {route_file.filename}")
-        contents = await route_file.read()
-        route_data_df = pd.read_excel(io.BytesIO(contents))
+        # Obtener paradas
+        stops_data = []
         
-        # Validar que el excel de arcos tenga las columnas necesarias
-        required_cols = ['stop_id', 'stop_sequence', 'direction_id', 'time_from_start_min']
-        if not all(col in route_data_df.columns for col in required_cols):
-            missing = [col for col in required_cols if col not in route_data_df.columns]
-            raise ValueError(f"Faltan columnas en el Excel de arcos de línea: {', '.join(missing)}")
-
-        # 2. Llamar al servicio
-        trips_df, stop_times_df = create_gtfs_from_sheet(sheet_data, route_data_df)
-
-        print(f"✅ GTFS generado. Trips: {len(trips_df)}, StopTimes: {len(stop_times_df)}")
+        if use_existing_route:
+            print(f"  → Usando ruta existente: {route_id}")
+            from app.models.gtfs_models import Trip, StopTime
+            
+            for direction in [0, 1]:
+                trip = db.query(Trip).filter(
+                    Trip.route_id == route_id,
+                    Trip.direction_id == direction
+                ).first()
+                
+                if trip:
+                    print(f"   → Encontrado trip existente (dir={direction}), shape_id: {trip.shape_id}")
+                    # --- CORRECCIÓN DE SHAPE_ID (Bug Ruta 1) ---
+                    trip_shape_id = trip.shape_id
+                    
+                    # --- CORRECCIÓN DE INDENTACIÓN (Bug NameError) ---
+                    # Ambas líneas (sts y el bucle) DEBEN estar dentro de "if trip:"
+                    sts = db.query(StopTime).filter(
+                        StopTime.trip_id == trip.trip_id
+                    ).order_by(StopTime.stop_sequence).all()
+                    
+                    for st in sts:
+                        stops_data.append({
+                            'stop_id': str(st.stop_id),
+                            'stop_sequence': st.stop_sequence,
+                            'direction_id': direction,
+                            'shape_id': trip_shape_id  # <-- Añadido
+                        })
+                else:
+                    print(f"   → (Advertencia) No se encontró trip existente para dir={direction}")
         
-        # Devolvemos un resumen (en un futuro, devolvería un .zip)
-        return {
-            "message": "Archivos GTFS generados.",
-            "trips_count": len(trips_df),
-            "stop_times_count": len(stop_times_df)
-        }
+        else:
+            print("  → Usando ruta nueva (desde Excel)")
+            if not stops_file:
+                raise HTTPException(400, "Falta archivo de paradas (stops_file)")
+            
+            content = await stops_file.read()
+            df = pd.read_excel(io.BytesIO(content))
+           
+            required = ['route_id', 'stop_id', 'direction_id', 'sequence']
+            if not all(c in df.columns for c in required):
+                raise HTTPException(400, f"Excel requiere columnas: {required}")
+            
+            # --- CORRECCIÓN DE FILTRADO (Bug Ruta 1) ---
+            df['route_id'] = df['route_id'].astype(str)
+            df_filtered = df[df['route_id'] == str(route_id)]
+            
+            if df_filtered.empty:
+                 raise HTTPException(400, f"No se encontraron paradas para la ruta {route_id} en el Excel.")
+            
+            print(f"   → Encontradas {len(df_filtered)} paradas para {route_id} en el Excel")
+
+            stops_data = [
+                {
+                    'stop_id': str(row['stop_id']),
+                    'stop_sequence': int(row['sequence']),
+                    'direction_id': int(row['direction_id']),
+                    # --- CORRECCIÓN DE SHAPE_ID (Bug Ruta 1) ---
+                    'shape_id': str(row['shape_id']) if 'shape_id' in row and pd.notna(row['shape_id']) else None
+                }
+                for _, row in df_filtered.iterrows() # <-- Usando df_filtered
+            ]
+
+        if not stops_data:
+            raise HTTPException(400, f"No se pudo cargar ninguna parada (stops_data) para la ruta {route_id}.")
+
+        # Generar GTFS
+        from app.services.gtfs_from_sheet import GTFSFromSheetGenerator
+        
+        generator = GTFSFromSheetGenerator(db)
+        result = generator.generate(
+            sheet_data=sheet_data,
+            route_id=route_id,
+            route_name=route_name,
+            service_id=service_id,
+            periodicity=periodicity,
+            shape_id_s1=shape_id_s1, # Manual (desde modal)
+            shape_id_s2=shape_id_s2, # Manual (desde modal)
+            stops_data=stops_data,   # Datos de paradas (ya filtrados y con shape_id)
+            bikes_allowed=bikes_allowed
+        )
+        
+        if not result.get('success'):
+            print(f"  → ❌ Error en GTFSFromSheetGenerator: {result.get('errors')}")
+            raise HTTPException(500, f"Error en el generador: {result.get('errors', 'Error desconocido')}")
+
+        print(f"  → ✅ GTFS generado: {result.get('trips_created')} trips.")
+        return result
+        
     except Exception as e:
+        import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error al generar GTFS: {str(e)}")
+        raise HTTPException(500, str(e))
 
 
 # ==================== HEALTH CHECK (Existente) ====================

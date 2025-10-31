@@ -3,19 +3,11 @@
 import React, { useState, useEffect } from 'react';
 import './SchedulingParameters.css';
 
-// --- IMPORTANTE ---
-// Asumo que este componente SÍ recibe las props 'onSheetGenerated' y 'onViewChange' 
-// de un componente 'App.jsx' similar al que te mostré en la respuesta anterior.
-// Si NO las recibe, la sábana se mostrará igualmente al final (en 'Tabla 8').
 function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
   
-  // ==================== ESTADOS ====================
-  
-  // Rutas disponibles
   const [routes, setRoutes] = useState([]);
   const [selectedRoute, setSelectedRoute] = useState(null);
   
-  // Tabla 1: Parámetros generales
   const [tabla1, setTabla1] = useState({
     numeroRuta: '',
     nombreRuta: '',
@@ -28,76 +20,53 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
     dwellBarrio: 0,
     distanciaCB: 0,
     distanciaBC: 0,
-    // --- NUEVOS CAMPOS AÑADIDOS (Basados en tu VBA) ---
-    // Estos son necesarios para la lógica de 'Crear Sábana'
-    idle_threshold_min: 30,       // Umbral de inactividad (IDLE_THRESHOLD_MIN)
-    max_wait_minutes_pairing: 15, // Umbral de espera para consolidar
-    num_buses_pool: 20            // Pool de buses inicial (BusCountMod2)
+    idle_threshold_min: 30,
+    max_wait_minutes_pairing: 15,
+    num_buses_pool: 20
   });
 
-  // Tabla 2: Flota Variable
-  const [tabla2, setTabla2] = useState([
-    { desde: '', buses: 0 }
-  ]);
-
-  // Tabla 3: Tiempos de Recorrido
-  const [tabla3, setTabla3] = useState([
-    { desde: '', tiempoCB: '', tiempoBC: '', tiempoCiclo: '' }
-  ]);
-
-  // Tablas 4-7: Resultados (solo lectura)
+  const [tabla2, setTabla2] = useState([{ desde: '', buses: 0 }]);
+  const [tabla3, setTabla3] = useState([{ desde: '', tiempoCB: '', tiempoBC: '', tiempoCiclo: '' }]);
   const [tabla4, setTabla4] = useState([]);
   const [tabla5, setTabla5] = useState([]);
   const [tabla6, setTabla6] = useState([]);
   const [tabla7, setTabla7] = useState([]);
 
-  // Estados de UI
   const [loading, setLoading] = useState(false);
   const [calculando, setCalculando] = useState(false);
   const [status, setStatus] = useState({ message: '', type: '' });
   
-  // Estados para modales
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showLoadModal, setShowLoadModal] = useState(false);
   const [scenarioName, setScenarioName] = useState('');
   const [savedScenarios, setSavedScenarios] = useState([]);
   const [loadingScenarios, setLoadingScenarios] = useState(false);
 
-  // --- NUEVOS ESTADOS PARA GENERACIÓN DE SÁBANA ---
   const [isNewRoute, setIsNewRoute] = useState(false);
   const [routeExcelFile, setRouteExcelFile] = useState(null);
   const [isGeneratingSheet, setIsGeneratingSheet] = useState(false);
-  const [generatedSheet, setGeneratedSheet] = useState([]); // Para Tabla 8
+  const [generatedSheet, setGeneratedSheet] = useState([]);
 
-  // ==================== EFECTOS ====================
-
-  // Cargar rutas al montar
   useEffect(() => {
     fetchRoutes();
   }, []);
 
-  // Cargar distancias cuando cambia la ruta seleccionada
   useEffect(() => {
     if (tabla1.numeroRuta) {
       fetchShapesDistances(tabla1.numeroRuta);
     }
   }, [tabla1.numeroRuta]);
 
-  // Calcular tiempoCiclo automáticamente en Tabla 3
   useEffect(() => {
     const updatedTabla3 = tabla3.map(row => {
       const tiempoCiclo = calculateTiempoCiclo(row.tiempoCB, row.tiempoBC);
       return { ...row, tiempoCiclo };
     });
     
-    // Solo actualizar si hay cambios
     if (JSON.stringify(updatedTabla3) !== JSON.stringify(tabla3)) {
       setTabla3(updatedTabla3);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabla3.map(r => r.tiempoCB + r.tiempoBC).join(',')]);
-
-  // ==================== FUNCIONES DE CARGA ====================
 
   const fetchRoutes = async () => {
     try {
@@ -109,10 +78,7 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
       }
     } catch (err) {
       console.error('Error cargando rutas:', err);
-      setStatus({
-        message: '❌ Error cargando rutas',
-        type: 'error'
-      });
+      setStatus({ message: '❌ Error cargando rutas', type: 'error' });
     }
   };
 
@@ -160,16 +126,11 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
       }
     } catch (err) {
       console.error('Error cargando escenarios:', err);
-      setStatus({
-        message: '❌ Error cargando escenarios guardados',
-        type: 'error'
-      });
+      setStatus({ message: '❌ Error cargando escenarios guardados', type: 'error' });
     } finally {
       setLoadingScenarios(false);
     }
   };
-
-  // ==================== HANDLERS ====================
 
   const handleRouteChange = (e) => {
     const routeId = e.target.value;
@@ -221,20 +182,16 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
     }
   };
 
-  // --- NUEVOS HANDLERS PARA SÁBANA ---
   const handleFileChange = (e) => {
     setRouteExcelFile(e.target.files[0]);
   };
 
-  // ==================== CÁLCULO DE INTERVALOS ====================
-
   const handleCalculate = async () => {
     setCalculando(true);
-    setGeneratedSheet([]); // Limpiar sábana si se recalculan intervalos
+    setGeneratedSheet([]);
     setStatus({ message: '🔄 Calculando intervalos...', type: 'loading' });
 
     try {
-      // Validar datos
       if (!tabla1.numeroRuta) {
         throw new Error('Selecciona una ruta');
       }
@@ -245,11 +202,7 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
         throw new Error('Completa todos los datos de Tiempos de Recorrido');
       }
 
-      const requestData = {
-        tabla1,
-        tabla2,
-        tabla3
-      };
+      const requestData = { tabla1, tabla2, tabla3 };
 
       console.log('📤 Enviando datos:', requestData);
 
@@ -267,7 +220,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
       const result = await res.json();
       console.log('✅ Resultados:', result);
 
-      // Actualizar tablas de resultados
       setTabla4(result.tabla4 || []);
       setTabla5(result.tabla5 || []);
       setTabla6(result.tabla6 || []);
@@ -280,23 +232,17 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
 
     } catch (err) {
       console.error('❌ Error:', err);
-      setStatus({
-        message: `❌ Error: ${err.message}`,
-        type: 'error'
-      });
+      setStatus({ message: `❌ Error: ${err.message}`, type: 'error' });
     } finally {
       setCalculando(false);
     }
   };
 
-  // ==================== NUEVA FUNCIÓN: GENERAR SÁBANA ====================
-
   const handleGenerateSheet = async () => {
     setIsGeneratingSheet(true);
-    setGeneratedSheet([]); // Limpiar sábana anterior
+    setGeneratedSheet([]);
     setStatus({ message: '🔄 Generando Sábana...', type: 'loading' });
 
-    // 1. Validar que los intervalos se hayan calculado
     if (tabla4.length === 0 || tabla5.length === 0 || tabla6.length === 0 || tabla7.length === 0) {
       setStatus({
         message: '❌ Error: Debes "Calcular Intervalos" exitosamente antes de generar la sábana.',
@@ -306,7 +252,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
       return;
     }
 
-    // 2. Validar el archivo si el checkbox está marcado
     if (isNewRoute && !routeExcelFile) {
       setStatus({
         message: '❌ Error: Marcaste "Ruta Nueva" pero no has seleccionado un archivo Excel.',
@@ -319,33 +264,25 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
     try {
       const formData = new FormData();
       
-      // 3. Empaquetar TODOS los parámetros que necesita el backend (lógica VBA)
-      // El backend usará 'general' para start/end/dwell
-      // y las tablas de headway/travel time para generar las salidas
       const parameters = {
-        general: tabla1,          // Contiene inicios, fines, dwells, y los nuevos params de VBA
-        headways_centro: tabla4,  // Tabla 4 (Desde, Hasta, Headway)
-        headways_barrio: tabla5,  // Tabla 5 (Desde, Hasta, Headway)
-        travel_times_cb: tabla6,  // Tabla 6 (Desde, Hasta, Tiempo)
-        travel_times_bc: tabla7,  // Tabla 7 (Desde, Hasta, Tiempo)
+        general: tabla1,
+        headways_centro: tabla4,
+        headways_barrio: tabla5,
+        travel_times_cb: tabla6,
+        travel_times_bc: tabla7,
       };
       
       formData.append('parameters', JSON.stringify(parameters));
       
-      // 4. Adjuntar el archivo Excel si existe
       if (isNewRoute && routeExcelFile) {
         formData.append('route_file', routeExcelFile);
       }
 
       console.log("📤 Enviando datos para generar sábana:", parameters);
 
-      // 5. Llamar al nuevo endpoint del backend
-      // (Este endpoint debe ser creado en 'app/api/scheduling.py' 
-      // y usar la lógica de 'sheet_generator.py' que te pasé)
       const res = await fetch('http://localhost:8000/scheduling/generate-sheet-from-intervals', {
         method: 'POST',
         body: formData
-        // No setear 'Content-Type', FormData lo hace automáticamente
       });
 
       if (!res.ok) {
@@ -360,15 +297,14 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
       }
 
       console.log('✅ Sábana generada:', sabanaResult);
-      setGeneratedSheet(sabanaResult); // Guardar en estado para Tabla 8
+      setGeneratedSheet(sabanaResult);
       setStatus({
         message: `✅ Sábana de programación generada con ${sabanaResult.length} viajes.`,
         type: 'success'
       });
 
-      // Opcional: Si el componente recibe props de App.jsx, las usa para navegar
       if (onSheetGenerated) {
-        onSheetGenerated(sabanaResult);
+        onSheetGenerated(sabanaResult, parameters);
       }
       if (onViewChange) {
         onViewChange('sched_sheet');
@@ -384,9 +320,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
       setIsGeneratingSheet(false);
     }
   };
-
-
-  // ==================== GUARDAR/CARGAR ESCENARIOS ====================
 
   const handleSave = async () => {
     if (!scenarioName.trim()) {
@@ -421,20 +354,13 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
 
       localStorage.setItem(`scheduling_scenario_${result.id}`, JSON.stringify(requestData));
 
-      setStatus({
-        message: `✅ ${result.message}`,
-        type: 'success'
-      });
-
+      setStatus({ message: `✅ ${result.message}`, type: 'success' });
       setShowSaveModal(false);
       setScenarioName('');
 
     } catch (err) {
       console.error('❌ Error:', err);
-      setStatus({
-        message: `❌ Error: ${err.message}`,
-        type: 'error'
-      });
+      setStatus({ message: `❌ Error: ${err.message}`, type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -454,17 +380,15 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
       const data = await res.json();
       console.log('✅ Escenario cargado:', data);
 
-      // Cargar datos
       setTabla1(data.tabla1);
       setTabla2(data.tabla2 || [{ desde: '', buses: 0 }]);
       setTabla3(data.tabla3 || [{ desde: '', tiempoCB: '', tiempoBC: '', tiempoCiclo: '' }]);
 
-      // Limpiar resultados
       setTabla4([]);
       setTabla5([]);
       setTabla6([]);
       setTabla7([]);
-      setGeneratedSheet([]); // Limpiar sábana también
+      setGeneratedSheet([]);
 
       setStatus({
         message: `✅ Escenario "${data.name}" cargado correctamente`,
@@ -475,10 +399,7 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
 
     } catch (err) {
       console.error('❌ Error:', err);
-      setStatus({
-        message: `❌ Error: ${err.message}`,
-        type: 'error'
-      });
+      setStatus({ message: `❌ Error: ${err.message}`, type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -514,8 +435,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
     }
   };
 
-  // ==================== UTILIDADES ====================
-
   const calculateTiempoCiclo = (tiempoCB, tiempoBC) => {
     if (!tiempoCB || !tiempoBC) return '';
 
@@ -538,7 +457,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
     return headway || '';
   };
 
-  // --- NUEVA FUNCIÓN DE RENDER (para Tabla 8) ---
   const renderGeneratedSheet = () => {
     if (!generatedSheet || generatedSheet.length === 0) {
       return null;
@@ -571,20 +489,16 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
     );
   };
 
-  // ==================== RENDER ====================
-
   return (
     <div className="scheduling-container">
       <h1>📋 Programación de Rutas</h1>
 
-      {/* Barra de estado */}
       {status.message && (
         <div className={`status-message ${status.type}`}>
           {status.message}
         </div>
       )}
 
-      {/* Botones principales */}
       <div className="main-buttons">
         <button onClick={() => { setShowLoadModal(true); fetchSavedScenarios(); }} className="btn-secondary">
           📥 Cargar Escenario
@@ -596,19 +510,17 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
           {calculando ? '⏳ Calculando...' : '🔢 Calcular Intervalos'}
         </button>
         
-        {/* --- NUEVO BOTÓN AÑADIDO --- */}
         <button 
           onClick={handleGenerateSheet} 
           disabled={isGeneratingSheet || calculando || tabla4.length === 0}
           className="btn-primary"
-          style={{ backgroundColor: '#28a745', borderColor: '#28a745' }} // Verde
+          style={{ backgroundColor: '#28a745', borderColor: '#28a745' }}
           title={tabla4.length === 0 ? "Debes 'Calcular Intervalos' primero" : "Generar la sábana de programación"}
         >
           {isGeneratingSheet ? '⏳ Generando Sábana...' : '📄 Crear Sábana de Programación'}
         </button>
       </div>
 
-      {/* --- NUEVA SECCIÓN PARA OPCIONES DE SÁBANA --- */}
       <section className="table-section" style={{ border: '2px dashed #007bff', backgroundColor: '#f8f9fa', padding: '1rem' }}>
         <h2 style={{ marginTop: 0, marginBottom: '1rem' }}>Opciones para "Crear Sábana de Programación"</h2>
         <div className="form-grid">
@@ -641,12 +553,10 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
         </div>
       </section>
 
-      {/* ========== TABLA 1: PARÁMETROS GENERALES ========== */}
       <section className="table-section">
         <h2>📊 Tabla 1: Parámetros Generales</h2>
 
         <div className="form-grid">
-          {/* Selector de Ruta */}
           <div className="form-group">
             <label>Ruta *</label>
             <select 
@@ -682,11 +592,11 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
               className="form-control"
             >
               <option value="">-- Seleccionar --</option>
-              <option value="Lunes-Viernes">Lunes-Viernes</option>
-              <option value="Sábado">Sábado</option>
+              <option value="L-V">L-V</option>
+              <option value="Sabado">Sabado</option>
               <option value="Domingo">Domingo</option>
-              <option value="L-M">Lunes-Martes</option>
-              <option value="X-V">Miércoles-Viernes</option>
+              <option value="L-M">L-M</option>
+              <option value="X-V">X-V</option>
             </select>
           </div>
 
@@ -780,7 +690,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
             />
           </div>
           
-          {/* --- NUEVOS CAMPOS UI AÑADIDOS A TABLA 1 --- */}
           <div className="form-group">
             <label>Pool de Buses (Lógica VBA)</label>
             <input
@@ -813,11 +722,9 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
               title="Tiempo máximo de espera para consolidar un viaje de ida y vuelta (Lógica VBA)"
             />
           </div>
-
         </div>
       </section>
 
-      {/* ========== TABLA 2: FLOTA VARIABLE ========== */}
       <section className="table-section">
         <h2>🚌 Tabla 2: Flota Variable (para 'Calcular Intervalos')</h2>
         
@@ -864,7 +771,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
         </button>
       </section>
 
-      {/* ========== TABLA 3: TIEMPOS DE RECORRIDO ========== */}
       <section className="table-section">
         <h2>⏱️ Tabla 3: Tiempos de Recorrido (para 'Calcular Intervalos')</h2>
         
@@ -932,10 +838,8 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
         </button>
       </section>
 
-      {/* ========== RESULTADOS (Tablas 4-7) ========== */}
       {(tabla4.length > 0 || tabla5.length > 0) && (
         <>
-          {/* Tabla 4: Intervalos Centro */}
           <section className="table-section results">
             <h2>📊 Tabla 4: Intervalos de Paso en Centro (Headways)</h2>
             <table className="data-table">
@@ -958,7 +862,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
             </table>
           </section>
 
-          {/* Tabla 5: Intervalos Barrio */}
           <section className="table-section results">
             <h2>📊 Tabla 5: Intervalos de Paso en Barrio (Headways)</h2>
             <table className="data-table">
@@ -981,7 +884,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
             </table>
           </section>
 
-          {/* Tabla 6: Tiempos C→B */}
           <section className="table-section results">
             <h2>⏱️ Tabla 6: Tiempos de Recorrido C→B (Interpolados)</h2>
             <table className="data-table">
@@ -1004,7 +906,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
             </table>
           </section>
 
-          {/* Tabla 7: Tiempos B→C */}
           <section className="table-section results">
             <h2>⏱️ Tabla 7: Tiempos de Recorrido B→C (Interpolados)</h2>
             <table className="data-table">
@@ -1029,11 +930,8 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
         </>
       )}
 
-      {/* --- NUEVA TABLA DE RESULTADO (Tabla 8) --- */}
       {renderGeneratedSheet()}
 
-
-      {/* ========== MODAL GUARDAR ========== */}
       {showSaveModal && (
         <div className="modal-overlay" onClick={() => setShowSaveModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
@@ -1066,7 +964,6 @@ function SchedulingParametersV3({ onSheetGenerated, onViewChange }) {
         </div>
       )}
 
-      {/* ========== MODAL CARGAR ========== */}
       {showLoadModal && (
         <div className="modal-overlay" onClick={() => setShowLoadModal(false)}>
           <div className="modal-content large" onClick={(e) => e.stopPropagation()}>
